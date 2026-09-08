@@ -48,6 +48,17 @@
 </div>
 
 <div class="panel">
+  <h2 class="title is-5">数据</h2>
+  <div class="field">
+    <label class="label">保留最近任务记录条数</label>
+    <input class="input" id="recordKeep" type="number" min="20" max="5000" value="200" inputmode="numeric" style="max-width:10rem">
+    <p class="hint">每次生成后自动清理更早的记录(含画廊图片记录)。</p>
+  </div>
+  <button class="button is-light" id="btnKeepSave">保存</button>
+  <p class="hint" id="keepHint" hidden></p>
+</div>
+
+<div class="panel">
   <h2 class="title is-5">队列</h2>
   <div class="buttons">
     <button class="button is-small" id="btnQueueRefresh">刷新</button>
@@ -120,6 +131,15 @@
       $('civError').textContent = e.message;
       $('civError').hidden = false;
     }
+  });
+
+  $('btnKeepSave').addEventListener('click', async () => {
+    try {
+      await api('/api/settings', { method: 'POST', body: JSON.stringify({ record_keep: parseInt($('recordKeep').value, 10) || 200 }) });
+      $('keepHint').textContent = '已保存';
+      $('keepHint').hidden = false;
+      setTimeout(() => { $('keepHint').hidden = true; }, 2500);
+    } catch (e) { alert(e.message); }
   });
 
   async function loadWs() {

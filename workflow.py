@@ -35,6 +35,8 @@ LORA_CLASSES = {"LoraLoader", "LoraLoaderModelOnly"}
 VAE_CLASSES = {"VAELoader"}
 LATENT_CLASSES = {"EmptyLatentImage", "EmptySD3LatentImage", "EmptyHunyuanLatentVideo"}
 SEED_INPUTS = {"seed", "noise_seed"}
+UI_SKIP_TYPES = {"Note", "MarkdownNote"}   # 纯前端便签节点,无执行语义
+PASSTHROUGH_TYPES = {"Reroute"}            # 前端重定向节点:输入直通输出
 
 
 class WorkflowParseError(ValueError):
@@ -82,12 +84,13 @@ def _cast(s0, val):
 def ui_to_api(uiwf, object_info):
     """把 ComfyUI「保存」的 UI 格式工作流转成可提交的 API 格式。
 
-    object_info: {class_type: info},需覆盖工作流里用到的全部节点类。
-    转换失败抛 WorkflowParseError(带可读原因),此时请改用「导出(API)」粘贴导入。
+    object_info: {class_type: info},需覆盖工作流里用到的全部可执行节点类。
+    支持:bypass/静音节点按 ComfyUI 语义直通(输出取同类型输入的来源)、Reroute、
+    PrimitiveNode 常量注入、字典型 widgets_values。转换失败抛 WorkflowParseError。
     """
     if not isinstance(uiwf, dict) or not isinstance(uiwf.get("nodes"), list):
         raise WorkflowParseError("不是 UI 格式的工作流 JSON")
-    if uiwf.get("definitions", {}).get("subgraphs"):
+    if (uiwf.get("definitions") or {}).get("subgraphs"):
         raise WorkflowParseError(
             "该工作流包含子图(subgraph),请在 ComfyUI 里用「导出(API)」后再粘贴导入")
 
@@ -96,18 +99,63 @@ def ui_to_api(uiwf, object_info):
     for l in uiwf.get("links") or []:
         if isinstance(l, list) and len(l) >= 4:
             links[l[0]] = (str(l[1]), l[2])
+    nodes = {}
+    for n in uiwf.get("nodes") or []:
+        if isinstance(n, dict) and n.get("id") is not None:
+            nodes[str(n["id"])] = n
 
-    api = {}
-    skipped_titles = {}
-    for node in uiwf.get("nodes", []):
-        nid = str(node.get("id"))
+    def find_passthrough_input(node, out_slot):
+        """bypass/静音/Reroute 节点:找与该输出同类型、且已连线的输入。"""
+        outs = node.get("outputs") or []
+        out_type = outs[out_slot].get("type") if out_slot < len(outs) else None
+        inputs = node.get("inputs") or []
+        if node.get("type") == "Reroute":
+            for inp in inputs:
+                if inp.get("link") is not None:
+                    return inp
+            return None
+        for inp in inputs:
+            if out_type and inp.get("type") == out_type and inp.get("link") is not None:
+                return inp
+        for inp in inputs:  # 容错:类型标注缺失时退化为第一个有连线的输入
+            if inp.get("link") is not None:
+                return inp
+        return None
+
+    def resolve_link(link_id, seen):
+        """把 link_id 解析为 ('node', 节点id, 槽) 或 ('value', 常量)。"""
+        if link_id in seen:
+            raise WorkflowParseError("工作流连线存在环,无法解析")
+        seen = seen | {link_id}
+        ref = links.get(link_id)
+        if ref is None:
+            raise WorkflowParseError(f"连线 {link_id} 找不到源头")
+        src_id, slot = ref
+        node = nodes.get(src_id)
+        if node is None:
+            raise WorkflowParseError(f"连线 {link_id} 指向不存在的节点 {src_id}")
         cls = node.get("type")
         mode = node.get("mode", 0)
         title = node.get("title") or cls
-        if mode in (2, 4):
-            raise WorkflowParseError(
-                f"节点「{title}」被 bypass/静音(mode={mode}),转换无法还原旁路逻辑,"
-                f"请先在 ComfyUI 里恢复或删除该节点,或改用「导出(API)」")
+        if cls in PASSTHROUGH_TYPES or mode in (2, 4):
+            inp = find_passthrough_input(node, slot)
+            if inp is None or inp.get("link") is None:
+                raise WorkflowParseError(
+                    f"节点「{title}」被 bypass/静音,其输出找不到可直通的输入来源;"
+                    f"请先在 ComfyUI 里恢复或删除该节点,或改用「导出(API)」")
+            return resolve_link(inp["link"], seen)
+        if cls == "PrimitiveNode":
+            wv = node.get("widgets_values") or []
+            return ("value", wv[0] if wv else None)
+        return ("node", src_id, slot)
+
+    api = {}
+    for nid, node in nodes.items():
+        cls = node.get("type")
+        mode = node.get("mode", 0)
+        title = node.get("title") or cls
+        if cls in UI_SKIP_TYPES or cls in PASSTHROUGH_TYPES or mode in (2, 4):
+            continue  # 便签/重定向/bypass 不进入执行图,连线在 resolve_link 里绕行
         info = (object_info or {}).get(cls)
         if not info:
             raise WorkflowParseError(
@@ -115,49 +163,52 @@ def ui_to_api(uiwf, object_info):
         specs = _widget_inputs(info)
 
         widgets = node.get("widgets_values")
-        if isinstance(widgets, dict):
-            raise WorkflowParseError(f"节点「{title}」的 widgets_values 是字典格式,暂不支持,请用「导出(API)」")
-        widgets = list(widgets or [])
-
-        # 分离连线输入与 widget 输入
-        link_refs = {}       # 输入名 -> link_id
-        widget_order = []    # widget 输入名,按 UI 顺序
+        widget_order, link_refs = [], {}
         has_markers = any("widget" in i for i in node.get("inputs") or [])
         for inp in node.get("inputs") or []:
             if inp.get("link") is not None:
                 link_refs[inp["name"]] = inp["link"]
             elif has_markers and "widget" in inp:
                 widget_order.append(inp["name"])
-        if not has_markers:
+        if not has_markers and not isinstance(widgets, dict):
             # 旧版格式:inputs 只含连线,widget 顺序按 object_info
             widget_order = list(specs.keys())
 
-        # 依次消费 widgets_values;带 control_after_generate 的输入后面多跟一个值
         values = {}
-        wi = 0
-        for name in widget_order:
-            spec = specs.get(name)
-            if spec is None:
-                raise WorkflowParseError(
-                    f"节点「{title}」的输入 {name} 在 object_info 中不存在,无法对齐参数,请用「导出(API)」")
-            if wi >= len(widgets):
-                raise WorkflowParseError(
-                    f"节点「{title}」的参数值数量不足({name}),请用「导出(API)」")
-            s0, meta = spec
-            val = widgets[wi]
-            wi += 1
-            if meta.get("control_after_generate") and wi < len(widgets) \
-                    and isinstance(widgets[wi], str):
+        if isinstance(widgets, dict):
+            # 新版部分节点(如 VHS_VideoCombine)按键名保存,逐名对位最稳
+            for name, spec in specs.items():
+                if name in widgets:
+                    values[name] = _cast(spec[0], widgets[name])
+        else:
+            widgets = list(widgets or [])
+            wi = 0
+            for name in widget_order:
+                spec = specs.get(name)
+                if spec is None:
+                    # 前端专属控件(如 LoadImage 的 upload 按钮):不参与执行,
+                    # 但要消耗一个位置值,保证后续参数不错位
+                    wi += 1
+                    continue
+                if wi >= len(widgets):
+                    raise WorkflowParseError(
+                        f"节点「{title}」的参数值数量不足({name}),请用「导出(API)」")
+                s0, meta = spec
+                val = widgets[wi]
                 wi += 1
-            values[name] = _cast(s0, val)
+                if meta.get("control_after_generate") and wi < len(widgets) \
+                        and isinstance(widgets[wi], str):
+                    wi += 1
+                values[name] = _cast(s0, val)
 
         inputs = {}
         for name, link_id in link_refs.items():
-            src = links.get(link_id)
-            if src is None:
-                raise WorkflowParseError(
-                    f"节点「{title}」的连线 {link_id} 找不到源头,请用「导出(API)」")
-            inputs[name] = [src[0], src[1]]
+            kind = resolve_link(link_id, set())
+            if kind[0] == "value":
+                spec = _widget_inputs(info).get(name)
+                inputs[name] = _cast(spec[0], kind[1]) if spec else kind[1]
+            else:
+                inputs[name] = [kind[1], kind[2]]
         inputs.update(values)
 
         spec_node = {"class_type": cls, "inputs": inputs}
@@ -165,7 +216,7 @@ def ui_to_api(uiwf, object_info):
             spec_node["_meta"] = {"title": node["title"]}
         api[nid] = spec_node
 
-    # 校验连线目标都存在(bypass 的节点会被跳过,导致悬空引用)
+    # 校验连线目标都存在
     for nid, spec in api.items():
         for name, v in spec["inputs"].items():
             if isinstance(v, list) and v[0] not in api:

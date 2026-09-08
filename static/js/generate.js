@@ -91,6 +91,11 @@
       saveDraft();
       startPoll();
       refreshTasks();
+      // 手机上把进度送到眼前
+      setTimeout(() => {
+        const card = taskList.querySelector('.task-card');
+        if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 150);
     } catch (e) {
       errBox.textContent = e.message;
       errBox.hidden = false;
@@ -158,6 +163,12 @@
     head.appendChild(right);
     d.appendChild(head);
 
+    if (t.status === 'queued' && t.queue_pos) {
+      const q = document.createElement('p');
+      q.className = 'task-meta';
+      q.textContent = `排队第 ${t.queue_pos} 位`;
+      d.appendChild(q);
+    }
     if (t.status === 'running') {
       const p = document.createElement('progress');
       p.className = 'progress is-link is-small';
