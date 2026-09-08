@@ -1,0 +1,74 @@
+/* ComfyWeb 页面布局与组件(配色变量见 skin.css) */
+.wrap{max-width:960px;margin-left:236px;padding:1.2rem 1rem 3rem}
+@media(max-width:899px){.wrap{margin-left:0}}
+
+.page-head{display:flex;align-items:center;justify-content:space-between;gap:.6rem;margin-bottom:1rem;flex-wrap:wrap}
+.page-head .title{margin:0}
+
+.panel{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:1rem}
+.panel + .panel{margin-top:1rem}
+.panel h2.title{margin-bottom:.8rem}
+
+/* 表单:标签在上,控件全宽,手机单列 */
+.field .label{font-size:.82rem;margin-bottom:.3rem}
+.hint{font-size:.72rem;color:var(--muted);margin-top:.25rem;line-height:1.5}
+
+/* 种子行:数字输入 + 随机开关 */
+.seed-row{display:flex;gap:.6rem;align-items:center}
+.seed-row .input{flex:1}
+
+/* 高级参数折叠 */
+details.adv>summary{cursor:pointer;font-size:.85rem;font-weight:600;color:var(--muted);padding:.4rem 0;list-style:none}
+details.adv>summary::before{content:'▸ ';transition:transform .18s ease;display:inline-block}
+details.adv[open]>summary::before{transform:rotate(90deg)}
+
+/* 参数评审表(导入/编辑) */
+.param-table{width:100%;border-collapse:collapse;font-size:.85rem}
+.param-table th{font-size:.7rem;color:var(--muted);text-align:left;padding:.35rem .4rem;border-bottom:1px solid var(--line);font-weight:600}
+.param-table td{padding:.4rem;border-bottom:1px solid var(--line);vertical-align:middle}
+.param-table tr:last-child td{border-bottom:none}
+.param-table .w-widget{width:4.5rem}
+.param-table .w-check{width:3rem;text-align:center}
+.param-table .w-label{width:11rem}
+.wf-widget-tag{font-size:.68rem;color:var(--muted);background:#f1f3f8;border:1px solid var(--line);border-radius:999px;padding:.1rem .5rem;white-space:nowrap}
+
+/* 任务卡片 */
+.task-card{border:1px solid var(--line);border-radius:var(--radius);padding:.8rem .9rem;margin-bottom:.7rem;background:var(--card)}
+.task-head{display:flex;align-items:center;justify-content:space-between;gap:.5rem;margin-bottom:.4rem;flex-wrap:wrap}
+.task-meta{font-size:.72rem;color:var(--muted)}
+.task-imgs{display:grid;grid-template-columns:repeat(2,1fr);gap:.5rem;margin-top:.6rem}
+@media(min-width:640px){.task-imgs{grid-template-columns:repeat(4,1fr)}}
+.task-imgs a{display:block;border-radius:var(--radius-s);overflow:hidden;border:1px solid var(--line)}
+.task-imgs img{width:100%;height:100%;object-fit:cover;display:block;aspect-ratio:1}
+.task-err{color:var(--bad);font-size:.8rem;margin-top:.4rem;white-space:pre-wrap;word-break:break-all}
+.task-prompt{font-size:.78rem;color:var(--muted);margin-top:.25rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* 画廊 */
+.gallery-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:.6rem}
+@media(min-width:640px){.gallery-grid{grid-template-columns:repeat(3,1fr)}}
+@media(min-width:900px){.gallery-grid{grid-template-columns:repeat(4,1fr)}}
+.gitem{display:block;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--card);transition:border-color .18s ease}
+.gitem:hover{border-color:#c9cfdd}
+.gitem img{width:100%;aspect-ratio:1;object-fit:cover;display:block}
+.gitem .gmeta{padding:.4rem .55rem;font-size:.7rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-top:1px solid var(--line)}
+
+/* 画廊详情 */
+.detail-img{max-width:100%;border-radius:var(--radius);border:1px solid var(--line);display:block;margin:0 auto}
+.kv{width:100%;border-collapse:collapse;font-size:.85rem}
+.kv td{padding:.35rem .4rem;border-bottom:1px solid var(--line);vertical-align:top}
+.kv td:first-child{color:var(--muted);width:8rem;white-space:nowrap}
+.kv tr:last-child td{border-bottom:none}
+.kv .val{word-break:break-all;white-space:pre-wrap}
+
+/* 状态圆点(状态文字复用 skin.css 的 .status) */
+.dot-queued::before{background:var(--warn)!important}
+.dot-running::before{background:var(--primary)!important}
+.dot-done::before{background:var(--ok)!important}
+.dot-error::before{background:var(--bad)!important}
+.dot-canceled::before{background:#c2c7d2!important}
+
+/* 空状态 */
+.empty{padding:1.6rem 1rem;text-align:center;color:var(--muted);font-size:.85rem}
+
+/* 分页 */
+.pager{display:flex;align-items:center;justify-content:center;gap:.8rem;margin-top:1.1rem;font-size:.85rem}

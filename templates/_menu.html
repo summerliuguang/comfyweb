@@ -1,0 +1,32 @@
+<style>
+.side{position:fixed;left:0;top:0;bottom:0;width:212px;background:#fff;border-right:1px solid var(--line,#e8eaf0);padding:1.1rem .9rem;overflow-y:auto;z-index:10}
+.logo{font-weight:700;font-size:1.02rem;margin-bottom:1.1rem;color:var(--text,#1f2430);letter-spacing:.02em}
+.side .menu-list a{border-radius:12px;font-size:.88rem;padding:.65rem .9rem}
+.side .menu-list a.on{background:var(--primary-weak,#eef3ff);color:var(--primary,#3e7bfa);font-weight:600}
+.foot{margin-top:1.2rem;font-size:.68rem;color:var(--muted,#a0a0b8);line-height:1.6}
+.mnav{display:none;position:sticky;top:.6rem;z-index:20;background:#fff;border:1px solid var(--line,#e8eaf0);border-radius:10px;padding:.6rem .9rem;margin-bottom:1rem}
+.mnav summary{font-weight:600;cursor:pointer;font-size:.9rem}
+@media(max-width:899px){.side{display:none}.mnav{display:block}.wrap{margin-left:0!important}}
+</style>
+<aside class="side">
+  <div class="logo">ComfyWeb</div>
+  <aside class="menu">
+    <p class="menu-label">ComfyUI 生成站</p>
+    <ul class="menu-list">
+      <li><a href="/" class="{{ 'on' if active == 'generate' }}">生成</a></li>
+      <li><a href="/workflows" class="{{ 'on' if active == 'workflows' }}">工作流</a></li>
+      <li><a href="/gallery" class="{{ 'on' if active == 'gallery' }}">画廊</a></li>
+      <li><a href="/settings" class="{{ 'on' if active == 'settings' }}">设置</a></li>
+    </ul>
+  </aside>
+  <div class="foot">ComfyWeb<br>家庭内网专用</div>
+</aside>
+<details class="mnav">
+  <summary>菜单</summary>
+  <ul class="menu-list" style="margin-top:.5rem">
+    <li><a href="/">生成</a></li>
+    <li><a href="/workflows">工作流</a></li>
+    <li><a href="/gallery">画廊</a></li>
+    <li><a href="/settings">设置</a></li>
+  </ul>
+</details>

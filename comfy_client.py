@@ -1,0 +1,324 @@
+"""ComfyUI 客户端:HTTP API 封装 + 常驻 WebSocket 监听线程。
+
+WS 线程跟踪本站提交的任务进度(progress_state / execution_* 事件,兼容旧版
+progress 与 executing{node:null} 完成信号),任务完成后从 /history 取输出图片
+写入 SQLite。WS 不可用时,app.py 的状态查询接口会用 /history 做对账兜底。
+"""
+import ipaddress
+import json
+import socket
+import threading
+import time
+import uuid
+
+import requests
+from urllib.parse import quote, urlsplit
+
+import db
+
+CLIENT_ID = "comfyweb-" + uuid.uuid4().hex[:12]
+
+
+class ComfyError(Exception):
+    """ComfyUI 不可达或返回错误。"""
+
+
+def format_prompt_error(data):
+    """把 POST /prompt 的 400 响应转成可读文本。"""
+    err = data.get("error") or {}
+    parts = [err.get("message") or "工作流校验失败"]
+    if err.get("details"):
+        parts.append(str(err["details"]))
+    for nid, ne in (data.get("node_errors") or {}).items():
+        cls = ne.get("class_type") or "?"
+        for e in ne.get("errors", []):
+            detail = e.get("details") or ""
+            parts.append(f"节点 {nid}({cls}): {e.get('message', '')}" + (f" - {detail}" if detail else ""))
+    return "\n".join(p for p in parts if p)
+
+
+class ComfyClient:
+    def __init__(self):
+        self._ws_thread = None
+        self._stop = threading.Event()
+        self._lock = threading.Lock()
+        self.ws_state = "未启动"
+        self.last_event_ts = 0.0
+
+    # ---------- HTTP ----------
+
+    def base_url(self):
+        url = (db.get_setting("comfy_url") or "").strip().rstrip("/")
+        if not url:
+            raise ComfyError("尚未配置 ComfyUI 地址,请先到「设置」页填写")
+        self._validate_url(url)
+        return url
+
+    @staticmethod
+    def _validate_url(url):
+        """地址必须是 http(s)、无凭据、纯主机形式,且解析到内网地址。
+
+        本站定位是家庭内网工具,限制目标为私有网段以消除 SSRF 面。
+        """
+        u = urlsplit(url)
+        if (u.scheme not in ("http", "https") or not u.hostname
+                or u.username or u.password or u.path not in ("", "/")
+                or u.query or u.fragment
+                or any(c.isspace() or ord(c) < 0x20 for c in url)):
+            raise ComfyError(f"ComfyUI 地址无效: {url} ,应为 http://内网IP:端口 形式")
+        try:
+            infos = socket.getaddrinfo(u.hostname, u.port or None, proto=socket.IPPROTO_TCP)
+        except socket.gaierror as e:
+            raise ComfyError(f"ComfyUI 主机无法解析: {u.hostname}") from e
+        for info in infos:
+            ip = ipaddress.ip_address(info[4][0])
+            if not ip.is_private:
+                raise ComfyError(f"ComfyUI 地址必须是内网地址(解析到 {ip} 不是私有网段)")
+
+    def get_json(self, path, params=None, timeout=15):
+        url = self.base_url() + path
+        try:
+            r = requests.get(url, params=params, timeout=timeout)
+        except requests.RequestException as e:
+            raise ComfyError(f"连接 ComfyUI 失败: {e.__class__.__name__}") from e
+        if r.status_code != 200:
+            raise ComfyError(f"ComfyUI 返回 {r.status_code}: {path}")
+        return r.json()
+
+    def post_json(self, path, body=None, timeout=30):
+        url = self.base_url() + path
+        try:
+            r = requests.post(url, json=body, timeout=timeout)
+        except requests.RequestException as e:
+            raise ComfyError(f"连接 ComfyUI 失败: {e.__class__.__name__}") from e
+        if r.status_code != 200:
+            try:
+                data = r.json()
+            except ValueError:
+                data = {}
+            raise ComfyError(format_prompt_error(data) if path == "/prompt" else f"ComfyUI 返回 {r.status_code}: {path}")
+        return r.json() if r.content else {}
+
+    def system_stats(self):
+        return self.get_json("/system_stats")
+
+    def models(self, folder):
+        return self.get_json(f"/models/{folder}")
+
+    def object_info(self, node_class):
+        return self.get_json(f"/object_info/{node_class}")
+
+    def userdata_list(self, folder):
+        """列出 ComfyUI 用户目录下的文件(如 workflows 下的已保存工作流)。"""
+        return self.get_json("/userdata", params={"dir": folder})
+
+    def userdata_read(self, relpath):
+        """读取用户目录文件。路径里的 / 需编码成 %2F 才能命中单段路由。"""
+        return self.get_json("/userdata/" + quote(relpath, safe=""))
+
+    def queue(self):
+        return self.get_json("/queue")
+
+    def history(self, prompt_id):
+        return self.get_json(f"/history/{prompt_id}")
+
+    def submit(self, prompt):
+        """提交工作流,返回 prompt_id。校验失败抛 ComfyError。"""
+        data = self.post_json("/prompt", {"prompt": prompt, "client_id": CLIENT_ID})
+        return data.get("prompt_id")
+
+    def interrupt(self, prompt_id=None):
+        self.post_json("/interrupt", {"prompt_id": prompt_id} if prompt_id else None)
+
+    def queue_delete(self, prompt_ids):
+        self.post_json("/queue", {"delete": list(prompt_ids)})
+
+    def queue_clear(self):
+        self.post_json("/queue", {"clear": True})
+
+    def view_url(self, filename, subfolder, img_type, preview=None):
+        params = {
+            "filename": filename,
+            "subfolder": subfolder or "",
+            "type": img_type or "output",
+        }
+        if preview:
+            params["preview"] = preview
+        qs = "&".join(f"{k}={requests.utils.quote(str(v), safe='')}" for k, v in params.items())
+        return self.base_url() + "/view?" + qs
+
+    def download_image(self, filename, subfolder, img_type, preview=None):
+        """请求 /view,返回 requests 响应(流式)。"""
+        url = self.view_url(filename, subfolder, img_type, preview)
+        try:
+            r = requests.get(url, stream=True, timeout=30)
+        except requests.RequestException as e:
+            raise ComfyError(f"取图失败: {e.__class__.__name__}") from e
+        if r.status_code != 200:
+            r.close()
+            raise ComfyError(f"取图失败: ComfyUI 返回 {r.status_code}")
+        return r
+
+    # ---------- 任务落库 ----------
+
+    def _tasks_by_prompt(self, prompt_id):
+        return db.query("SELECT id, status FROM tasks WHERE prompt_id=?", (prompt_id,))
+
+    def record_progress(self, prompt_id, value, mx):
+        if not prompt_id or not mx:
+            return
+        db.execute(
+            "UPDATE tasks SET status='running' WHERE prompt_id=? AND status IN ('queued','running')",
+            (prompt_id,),
+        )
+        pct = max(0.0, min(100.0, float(value) / float(mx) * 100.0))
+        db.execute("UPDATE tasks SET progress=? WHERE prompt_id=? AND status='running'", (pct, prompt_id))
+
+    def finalize_from_history(self, prompt_id, forced_status=None, error=""):
+        """从 /history 读取 prompt 结果并落库。WS 事件与轮询对账共用。"""
+        if not prompt_id:
+            return
+        rows = self._tasks_by_prompt(prompt_id)
+        if not rows:
+            return
+        if all(r["status"] in ("done", "error", "canceled") for r in rows):
+            return
+        try:
+            hist = self.history(prompt_id)
+        except ComfyError:
+            if forced_status:
+                self._mark(prompt_id, forced_status, error)
+            return
+        entry = (hist or {}).get(prompt_id)
+        if entry is None:
+            if forced_status:
+                self._mark(prompt_id, forced_status, error)
+            return
+        status = entry.get("status") or {}
+        status_str = status.get("status_str") or "success"
+        outputs = entry.get("outputs") or {}
+        images = []
+        for node_out in outputs.values():
+            for img in node_out.get("images") or []:
+                images.append((img.get("filename") or "", img.get("subfolder") or "", img.get("type") or "output"))
+        if status_str != "success" and not images and not forced_status == "canceled":
+            self._mark(prompt_id, "error", error or "执行出错")
+            return
+        self._insert_images(rows[0]["id"], images)
+        final = forced_status or "done"
+        db.execute(
+            "UPDATE tasks SET status=?, error=?, progress=100, finished_at=datetime('now','localtime') "
+            "WHERE prompt_id=? AND status IN ('queued','running')",
+            (final, error, prompt_id),
+        )
+
+    def _insert_images(self, task_id, images):
+        for filename, subfolder, img_type in images:
+            if not filename:
+                continue
+            db.execute(
+                "INSERT OR IGNORE INTO images(task_id, filename, subfolder, type) VALUES(?,?,?,?)",
+                (task_id, filename, subfolder, img_type),
+            )
+
+    def _mark(self, prompt_id, status, error=""):
+        db.execute(
+            "UPDATE tasks SET status=?, error=?, finished_at=datetime('now','localtime') "
+            "WHERE prompt_id=? AND status IN ('queued','running')",
+            (status, error, prompt_id),
+        )
+
+    # ---------- WebSocket 监听 ----------
+
+    def ensure_ws(self):
+        if self._ws_thread and self._ws_thread.is_alive():
+            return
+        self._stop.clear()
+        self._ws_thread = threading.Thread(target=self._ws_loop, name="comfyws", daemon=True)
+        self._ws_thread.start()
+
+    def _ws_loop(self):
+        import websocket
+
+        while not self._stop.is_set():
+            try:
+                base = self.base_url()
+            except ComfyError:
+                self.ws_state = "未配置地址"
+                self._stop.wait(5)
+                continue
+            ws_url = base.replace("http", "ws", 1) + f"/ws?clientId={CLIENT_ID}"
+            ws = None
+            try:
+                ws = websocket.create_connection(ws_url, timeout=10)
+                self.ws_state = "已连接"
+                while not self._stop.is_set():
+                    try:
+                        msg = ws.recv()
+                    except websocket.WebSocketTimeoutException:
+                        continue
+                    if isinstance(msg, bytes):
+                        continue  # 预览图二进制帧,v1 不展示
+                    try:
+                        self._handle_event(json.loads(msg))
+                    except (ValueError, KeyError):
+                        continue
+            except ComfyError:
+                self.ws_state = "地址未配置或不可达"
+            except Exception:
+                self.ws_state = "已断开,正在重连"
+            finally:
+                if ws is not None:
+                    try:
+                        ws.close()
+                    except Exception:
+                        pass
+            if not self._stop.is_set():
+                self._stop.wait(3)
+
+    def _handle_event(self, msg):
+        etype = msg.get("type")
+        data = msg.get("data") or {}
+        self.last_event_ts = time.time()
+        if etype == "execution_start":
+            pid = data.get("prompt_id")
+            if pid:
+                db.execute(
+                    "UPDATE tasks SET status='running' WHERE prompt_id=? AND status='queued'", (pid,)
+                )
+        elif etype == "progress_state":
+            pid = data.get("prompt_id")
+            best = None
+            for n in (data.get("nodes") or {}).values():
+                mx = n.get("max") or 0
+                v = n.get("value") or 0
+                if mx and (best is None or mx > best[1]):
+                    best = (v, mx)
+            if best:
+                self.record_progress(pid, best[0], best[1])
+        elif etype == "progress":  # 旧版事件
+            pid, v, mx = data.get("prompt_id"), data.get("value"), data.get("max")
+            if v is not None and mx:
+                self.record_progress(pid, v, mx)
+        elif etype == "execution_success":
+            self.finalize_from_history(data.get("prompt_id"))
+        elif etype == "executing":
+            if data.get("node") is None and data.get("prompt_id"):  # 旧版完成信号
+                self.finalize_from_history(data.get("prompt_id"))
+            elif data.get("prompt_id"):
+                db.execute(
+                    "UPDATE tasks SET status='running' WHERE prompt_id=? AND status='queued'",
+                    (data["prompt_id"],),
+                )
+        elif etype == "execution_error":
+            node = data.get("node_type") or ""
+            text = data.get("exception_message") or data.get("exception_type") or "执行出错"
+            self.finalize_from_history(
+                data.get("prompt_id"), forced_status="error",
+                error=f"{node}: {text}" if node else text,
+            )
+        elif etype == "execution_interrupted":
+            self.finalize_from_history(data.get("prompt_id"), forced_status="canceled", error="已手动中断")
+
+
+client = ComfyClient()

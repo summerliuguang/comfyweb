@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}编辑模板 - ComfyWeb{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="title is-4">编辑模板</h1>
+  <a class="button is-small" href="/workflows">返回列表</a>
+</div>
+
+<div class="panel" id="editor" hidden>
+  <div class="field" style="max-width:22rem">
+    <label class="label">模板名称</label>
+    <input class="input" id="wfName" type="text">
+  </div>
+  <p class="hint" style="margin-bottom:.7rem">勾选「显示」的参数会出现在生成页表单里;「高级」勾选的参数收进折叠区。</p>
+  <div style="overflow-x:auto">
+    <table class="param-table">
+      <thead><tr><th class="w-check">显示</th><th class="w-label">标签</th><th class="w-widget">控件</th><th>默认值</th><th class="w-check">高级</th></tr></thead>
+      <tbody id="paramRows"></tbody>
+    </table>
+  </div>
+  <div class="buttons" style="margin-top:.9rem">
+    <button class="button is-link" id="btnSave">保存</button>
+    <span class="task-meta" id="saveHint"></span>
+  </div>
+  <p class="task-err" id="saveError" hidden></p>
+</div>
+<p class="empty" id="loading">加载中…</p>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/render.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const wid = {{ wf.id }};
+
+  async function load() {
+    const res = await fetch('/api/workflows/' + wid);
+    const data = await res.json();
+    if (!res.ok) { $('loading').textContent = data.error || res.status; return; }
+    $('wfName').value = data.name;
+    renderParamEditor($('paramRows'), data.params);
+    $('editor').hidden = false;
+    $('loading').hidden = true;
+  }
+
+  $('btnSave').addEventListener('click', async () => {
+    $('saveError').hidden = true;
+    try {
+      const res = await fetch('/api/workflows/' + wid, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: $('wfName').value, params: collectParams($('paramRows')) })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || res.status);
+      $('saveHint').textContent = '已保存 ' + new Date().toLocaleTimeString();
+      setTimeout(() => { $('saveHint').textContent = ''; }, 2500);
+    } catch (e) {
+      $('saveError').textContent = e.message;
+      $('saveError').hidden = false;
+    }
+  });
+
+  load();
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+{% block title %}导入工作流 - ComfyWeb{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="title is-4">导入工作流</h1>
+  <a class="button is-small" href="/workflows">返回列表</a>
+</div>
+
+<div class="panel" id="step1">
+  <div class="field">
+    <label class="label">从 ComfyUI 拉取已保存的工作流</label>
+    <div style="display:flex;gap:.5rem">
+      <div class="select is-fullwidth">
+        <select id="remoteSelect"><option value="">— 先刷新列表 —</option></select>
+      </div>
+      <button class="button" id="btnRemoteRefresh">刷新</button>
+    </div>
+    <p class="hint">列出 ComfyUI 界面里「保存」过的工作流,自动转换后进入确认步骤。含子图/bypass 节点或特殊插件时可能转换失败,可改用下方粘贴「导出(API)」的方式。</p>
+    <button class="button is-link is-light" id="btnRemoteImport" disabled style="margin-top:.4rem">拉取并解析</button>
+  </div>
+  <div class="divider" style="display:flex;align-items:center;gap:.8rem;color:var(--muted);font-size:.75rem;margin:.8rem 0">
+    <span style="flex:1;height:1px;background:var(--line)"></span>或粘贴 JSON<span style="flex:1;height:1px;background:var(--line)"></span>
+  </div>
+  <div class="field">
+    <label class="label">粘贴「导出(API)」的 JSON</label>
+    <textarea class="textarea" id="wfText" rows="9" placeholder='在 ComfyUI 菜单里选「工作流 → 导出(API)」,把保存的 JSON 文件内容粘贴到这里。'></textarea>
+    <p class="hint">也可以选择文件:<input type="file" id="wfFile" accept=".json,application/json" style="margin-top:.3rem"></p>
+  </div>
+  <button class="button is-link" id="btnParse">解析工作流</button>
+  <p class="task-err" id="parseError" hidden></p>
+</div>
+
+<div class="panel" id="step2" hidden>
+  <h2 class="title is-5">确认参数</h2>
+  <p class="hint" style="margin-bottom:.7rem">勾选「显示」的参数会出现在生成页表单里;「高级」勾选的参数收进折叠区。标签可改成你习惯的叫法,默认值取自工作流当前值。</p>
+  <div class="field" style="max-width:22rem">
+    <label class="label">模板名称</label>
+    <input class="input" id="wfName" type="text" placeholder="例如:SDXL 文生图">
+  </div>
+  <p class="hint" id="wfSummary" style="margin-bottom:.5rem"></p>
+  <div style="overflow-x:auto">
+    <table class="param-table">
+      <thead><tr><th class="w-check">显示</th><th class="w-label">标签</th><th class="w-widget">控件</th><th>默认值</th><th class="w-check">高级</th></tr></thead>
+      <tbody id="paramRows"></tbody>
+    </table>
+  </div>
+  <div class="buttons" style="margin-top:.9rem">
+    <button class="button is-link" id="btnSave">保存模板</button>
+    <button class="button" id="btnBack">重新粘贴</button>
+  </div>
+  <p class="task-err" id="saveError" hidden></p>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/render.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  let parsed = null;
+
+  function showReview(data) {
+    parsed = data;
+    $('step1').hidden = true;
+    $('step2').hidden = false;
+    renderParamEditor($('paramRows'), data.params);
+    $('wfSummary').textContent = `共 ${data.node_count} 个节点` +
+      (data.batch_node ? `,批量生成可用(batch_size)` : `,数量将按多次提交实现`) +
+      (data.warnings && data.warnings.length ? `;提示: ${data.warnings.join(';')}` : '');
+    $('wfName').focus();
+  }
+
+  async function api(url, body) {
+    const res = await fetch(url, body ? {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    } : {});
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || res.status);
+    return data;
+  }
+
+  /* ---------- 从 ComfyUI 拉取 ---------- */
+  async function loadRemote() {
+    try {
+      const d = await api('/api/remote/workflows');
+      const sel = $('remoteSelect');
+      sel.innerHTML = '';
+      if (!d.workflows.length) {
+        sel.innerHTML = '<option value="">(ComfyUI 里没有已保存的工作流)</option>';
+        return;
+      }
+      sel.innerHTML = '<option value="">— 选择工作流 —</option>' +
+        d.workflows.map(n => `<option value="${encodeURIComponent(n)}">${n.replace(/\.json$/, '')}</option>`).join('');
+      $('btnRemoteImport').disabled = false;
+    } catch (e) {
+      $('remoteSelect').innerHTML = `<option value="">(读取失败: ${e.message})</option>`;
+    }
+  }
+  $('btnRemoteRefresh').addEventListener('click', loadRemote);
+  $('btnRemoteImport').addEventListener('click', async () => {
+    $('parseError').hidden = true;
+    if (!$('remoteSelect').value) return;
+    $('btnRemoteImport').classList.add('is-loading');
+    try {
+      const d = await api('/api/workflows/import_remote', { name: decodeURIComponent($('remoteSelect').value) });
+      $('wfText').value = JSON.stringify(d.workflow);
+      $('wfName').value = d.name || '';
+      showReview(d);
+    } catch (e) {
+      $('parseError').textContent = e.message;
+      $('parseError').hidden = false;
+    } finally {
+      $('btnRemoteImport').classList.remove('is-loading');
+    }
+  });
+
+  $('wfFile').addEventListener('change', e => {
+    const f = e.target.files[0];
+    if (!f) return;
+    const r = new FileReader();
+    r.onload = () => { $('wfText').value = r.result; };
+    r.readAsText(f);
+  });
+
+  $('btnParse').addEventListener('click', async () => {
+    $('parseError').hidden = true;
+    try {
+      const d = await api('/api/workflows/parse', { text: $('wfText').value });
+      showReview(d);
+    } catch (e) {
+      $('parseError').textContent = e.message;
+      $('parseError').hidden = false;
+    }
+  });
+
+  $('btnBack').addEventListener('click', () => {
+    $('step2').hidden = true;
+    $('step1').hidden = false;
+  });
+
+  $('btnSave').addEventListener('click', async () => {
+    $('saveError').hidden = true;
+    const params = collectParams($('paramRows'));
+    try {
+      const res = await fetch('/api/workflows', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: $('wfName').value,
+          workflow: JSON.parse($('wfText').value),
+          params,
+          batch_node: parsed.batch_node
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || res.status);
+      location.href = '/workflows';
+    } catch (e) {
+      if (e instanceof SyntaxError) {
+        $('saveError').textContent = '保存失败: 工作流 JSON 已被修改,请重新粘贴';
+      } else {
+        $('saveError').textContent = e.message;
+      }
+      $('saveError').hidden = false;
+    }
+  });
+
+  loadRemote();
+})();
+</script>
+{% endblock %}

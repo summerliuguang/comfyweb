@@ -1,0 +1,14 @@
+# 运行时数据与密钥
+.env
+data/
+
+# 本地工具状态
+.mimosa/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# 编辑器/系统
+.DS_Store
+*.swp

@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}图片详情 - ComfyWeb{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="title is-4">图片详情</h1>
+  <a class="button is-small" href="/gallery">返回画廊</a>
+</div>
+
+<div class="panel">
+  <img class="detail-img" src="{{ item.url }}" alt="生成图片">
+</div>
+
+<div class="panel">
+  <table class="kv">
+    <tr><td>状态</td><td>{{ item.status }}</td></tr>
+    <tr><td>工作流</td><td>{{ item.workflow_name }}</td></tr>
+    <tr><td>生成时间</td><td>{{ item.task_created }}</td></tr>
+    {% if item.prompt_text %}
+    <tr><td>正面提示词</td><td class="val">{{ item.prompt_text }}</td></tr>
+    {% endif %}
+    {% if item.seed is not none %}
+    <tr><td>种子</td><td class="val">{{ item.seed }}</td></tr>
+    {% endif %}
+    {% for p in item.params %}
+    {% if p.label != '随机种子' or item.seed is none %}
+    <tr><td>{{ p.label }}</td><td class="val">{{ p.value }}</td></tr>
+    {% endif %}
+    {% endfor %}
+  </table>
+  <div class="buttons" style="margin-top:.9rem">
+    <a class="button is-link" href="{{ item.download }}" download>下载原图</a>
+    <button class="button is-danger is-light" id="btnDelete">删除记录</button>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+document.getElementById('btnDelete').addEventListener('click', async () => {
+  if (!confirm('从画廊删除这条图片记录?')) return;
+  const r = await fetch('/api/gallery/image/{{ item.id }}/delete', { method: 'POST' });
+  if (r.ok) location.href = '/gallery';
+  else { const d = await r.json().catch(() => ({})); alert(d.error || r.status); }
+});
+</script>
+{% endblock %}
