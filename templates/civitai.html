@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} - ComfyWeb{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="title is-4">{{ title }} <span class="tag is-light">Civitai</span></h1>
+</div>
+
+<div class="panel">
+  <div class="field">
+    <label class="label">已安装（ComfyUI）</label>
+    <div id="localBox"><p class="empty">读取中…</p></div>
+  </div>
+</div>
+
+<div class="panel">
+  <form id="searchForm" style="display:flex;flex-direction:column;gap:.6rem">
+    <div style="display:flex;gap:.5rem">
+      <input class="input" id="q" type="search" placeholder="搜索 {{ title }} 名称/关键词">
+      <button class="button is-link" type="submit">搜索</button>
+    </div>
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+      <div class="select is-small" style="flex:1;min-width:8rem">
+        <select id="sort">
+          <option value="Most Downloaded">最多下载</option>
+          <option value="Highest Rated">评分最高</option>
+          <option value="Most Liked">最多点赞</option>
+          <option value="Newest">最新发布</option>
+        </select>
+      </div>
+      <div class="select is-small" style="flex:1;min-width:8rem">
+        <select id="base">
+          <option value="">全部底模</option>
+          <option>SD 1.5</option>
+          <option>SDXL 1.0</option>
+          <option>Pony</option>
+          <option>Illustrious</option>
+          <option>NoobAI</option>
+          <option>Flux.1 S</option>
+          <option>Flux.1 D</option>
+          <option>SD 3.5</option>
+        </select>
+      </div>
+    </div>
+  </form>
+  <p class="task-err" id="listError" hidden></p>
+  <div id="grid" class="gallery-grid" style="margin-top:.8rem"></div>
+  <p class="empty" id="emptyHint" hidden>没有结果,换个关键词试试</p>
+  <div class="pager" id="pager" hidden>
+    <button class="button is-small" id="prevPage">上一页</button>
+    <span id="pageInfo"></span>
+    <button class="button is-small" id="nextPage">下一页</button>
+  </div>
+</div>
+
+<!-- 详情弹层 -->
+<div id="detailOverlay" hidden style="position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:40;overflow-y:auto">
+  <div style="max-width:760px;margin:1rem auto;background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:1rem" id="detailBox"></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>window.CIVI_TYPE = {{ civ_type | tojson }}; window.LOCAL_DIR = {{ ('loras' if civ_type == 'LORA' else 'checkpoints') | tojson }};
+window.LOCAL_LABEL = {{ ('LoRA 文件' if civ_type == 'LORA' else '模型文件') | tojson }};
+window.INSTALL_HINT = {{ ('放到 ComfyUI 的 models/loras 目录;生成页模板里给 LoRA 节点选择它,强度一般 0.6~1.0,触发词加进正面提示词。' if civ_type == 'LORA' else '放到 ComfyUI 的 models/checkpoints(或 diffusion_models)目录,在「设置」页刷新模型列表后即可在生成页的模型下拉中选择。') | tojson }};</script>
+<script src="/static/js/civitai.js"></script>
+{% endblock %}

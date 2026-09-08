@@ -29,6 +29,25 @@
 </div>
 
 <div class="panel">
+  <h2 class="title is-5">Civitai（模型 / LoRA 信息源）</h2>
+  <div class="field">
+    <label class="label">代理地址（可选）</label>
+    <input class="input" id="civProxy" type="text" value="{{ civitai_proxy }}" placeholder="http://192.168.x.x:20171" inputmode="url">
+    <p class="hint">本机无法直连 civitai.com 时填写；留空则直连。模型/LoRA 页与图片代理都走这里。</p>
+  </div>
+  <div class="field">
+    <label class="label">API Token（可选）</label>
+    <input class="input" id="civToken" type="password" value="{{ civitai_token }}" placeholder="civitai.com 账户设置里生成">
+    <p class="hint">部分模型下载与更高速率限制需要。</p>
+  </div>
+  <label class="checkbox" style="font-size:.88rem"><input type="checkbox" id="civNsfw" {{ 'checked' if civitai_nsfw }}> 显示 NSFW 内容</label>
+  <div class="buttons" style="margin-top:.7rem">
+    <button class="button is-link" id="btnCivSave">保存 Civitai 设置</button>
+  </div>
+  <p class="task-err" id="civError" hidden></p>
+</div>
+
+<div class="panel">
   <h2 class="title is-5">队列</h2>
   <div class="buttons">
     <button class="button is-small" id="btnQueueRefresh">刷新</button>
@@ -81,6 +100,26 @@
       setTimeout(() => { $('refreshHint').hidden = true; }, 4000);
     } catch (e) { alert(e.message); }
     finally { $('btnRefreshModels').classList.remove('is-loading'); }
+  });
+
+  $('btnCivSave').addEventListener('click', async () => {
+    $('civError').hidden = true;
+    try {
+      await api('/api/settings', {
+        method: 'POST',
+        body: JSON.stringify({
+          civitai_proxy: $('civProxy').value.trim(),
+          civitai_token: $('civToken').value.trim(),
+          civitai_nsfw: $('civNsfw').checked
+        })
+      });
+      $('refreshHint').textContent = 'Civitai 设置已保存';
+      $('refreshHint').hidden = false;
+      setTimeout(() => { $('refreshHint').hidden = true; }, 3000);
+    } catch (e) {
+      $('civError').textContent = e.message;
+      $('civError').hidden = false;
+    }
   });
 
   async function loadWs() {
