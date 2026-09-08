@@ -14,9 +14,11 @@
   </div>
   <div class="buttons">
     <button class="button is-link" id="btnTest">保存并测试连接</button>
+    <button class="button is-light" id="btnRefreshModels">刷新模型列表</button>
     <span class="status" id="wsState">WS 状态: --</span>
   </div>
   <p class="task-err" id="testError" hidden></p>
+  <p class="hint" id="refreshHint" hidden></p>
   <div id="serverInfo" hidden style="margin-top:.6rem">
     <table class="kv">
       <tr><td>ComfyUI 版本</td><td id="siVersion">--</td></tr>
@@ -67,6 +69,18 @@
     } finally {
       $('btnTest').classList.remove('is-loading');
     }
+  });
+
+  $('btnRefreshModels').addEventListener('click', async () => {
+    $('refreshHint').hidden = true;
+    $('btnRefreshModels').classList.add('is-loading');
+    try {
+      await api('/api/cache/clear', { method: 'POST' });
+      $('refreshHint').textContent = '已清空缓存,下次打开生成页将拉取最新模型/LoRA 列表';
+      $('refreshHint').hidden = false;
+      setTimeout(() => { $('refreshHint').hidden = true; }, 4000);
+    } catch (e) { alert(e.message); }
+    finally { $('btnRefreshModels').classList.remove('is-loading'); }
   });
 
   async function loadWs() {
