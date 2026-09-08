@@ -205,7 +205,7 @@ def page_gallery():
 @app.get("/gallery/image/<int:img_id>")
 def page_gallery_detail(img_id):
     row = db.query_one(
-        "SELECT i.*, t.workflow_name, t.prompt_text, t.seed, t.params_json, "
+        "SELECT i.*, t.workflow_id, t.workflow_name, t.prompt_text, t.seed, t.params_json, "
         "t.status, t.created_at AS task_created, t.count "
         "FROM images i JOIN tasks t ON t.id=i.task_id WHERE i.id=?", (img_id,))
     if not row:
@@ -465,9 +465,11 @@ def image_url(filename, subfolder, img_type, preview=None, dl=False):
 def serialize_task(t, images):
     return {
         "id": t["id"], "status": t["status"], "progress": t["progress"],
-        "error": t["error"], "workflow_name": t["workflow_name"],
+        "error": t["error"], "workflow_id": t["workflow_id"],
+        "workflow_name": t["workflow_name"],
         "prompt_text": t["prompt_text"], "count": t["count"],
-        "seed": t["seed"], "created_at": t["created_at"],
+        "seed": t["seed"], "params": json.loads(t["params_json"] or "[]"),
+        "created_at": t["created_at"],
         "images": [{"id": im["id"],
                     "thumb": image_url(im["filename"], im["subfolder"], im["type"],
                                        preview="webp;jpeg;75"),
@@ -524,6 +526,17 @@ def api_tasks_recent():
         for im in img_rows:
             by_task.setdefault(im["task_id"], []).append(im)
     return {"tasks": [serialize_task(t, by_task.get(t["id"], [])) for t in rows]}
+
+
+@app.get("/api/tasks/<int:tid>")
+def api_task_get(tid):
+    t = db.query_one("SELECT * FROM tasks WHERE id=?", (tid,))
+    if not t:
+        return err("任务不存在", 404)
+    reconcile_active_tasks([t])
+    t = db.query_one("SELECT * FROM tasks WHERE id=?", (tid,))
+    images = db.query("SELECT * FROM images WHERE task_id=? ORDER BY id", (tid,))
+    return {"task": serialize_task(t, images)}
 
 
 @app.post("/api/tasks/<int:tid>/cancel")
@@ -594,6 +607,15 @@ def api_queue_clear():
         client.queue_clear()
     except ComfyError as e:
         return err(e, 502)
+    return {"ok": True}
+
+
+@app.post("/api/cache/clear")
+def api_cache_clear():
+    """清空模型列表缓存(在 ComfyUI 加了新模型后手动刷新)。"""
+    with _cache_lock:
+        for k in [k for k in _cache if k.startswith("models:")]:
+            _cache.pop(k, None)
     return {"ok": True}
 
 

@@ -29,6 +29,9 @@
   </table>
   <div class="buttons" style="margin-top:.9rem">
     <a class="button is-link" href="{{ item.download }}" download>下载原图</a>
+    {% if item.workflow_id %}
+    <a class="button is-light" href="/?template={{ item.workflow_id }}&task={{ item.id }}">再次生成</a>
+    {% endif %}
     <button class="button is-danger is-light" id="btnDelete">删除记录</button>
   </div>
 </div>

@@ -1,4 +1,4 @@
-/* 生成页:加载模板表单、提交、轮询任务状态 */
+/* 生成页:加载模板表单、提交、轮询任务状态;草稿自动保存、再次生成、完成提醒 */
 (function () {
   const $ = id => document.getElementById(id);
   const wfSelect = $('wfSelect'), formArea = $('formArea'), submitRow = $('submitRow');
@@ -6,26 +6,66 @@
   let tpl = null;
   let pollIds = new Set(window.ACTIVE_IDS || []);
   let pollTimer = null;
+  const lastStatus = {};  // taskId -> 上次状态,用于完成提醒
 
-  async function api(url, opts) {
+  const draftKey = wid => 'comfyweb.draft.' + wid;
+
+  async function jsonFetch(path, opts) {
     const r = await fetch(url, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts));
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(data.error || r.status);
     return data;
   }
 
-  wfSelect.addEventListener('change', async () => {
+  function saveDraft() {
+    if (!tpl) return;
+    const values = {};
+    for (const el of formArea.querySelectorAll('[data-pname]')) {
+      if (el.type === 'hidden') continue;
+      values[el.dataset.pname] = controlValue(el);
+    }
+    localStorage.setItem(draftKey(tpl.id), JSON.stringify({
+      values, count: $('countInput').value, random: $('seedRandom') ? $('seedRandom').checked : true,
+    }));
+  }
+
+  function applyDraft(values) {
+    for (const el of formArea.querySelectorAll('[data-pname]')) {
+      if (el.type === 'hidden' || !(el.dataset.pname in values)) continue;
+      const v = values[el.dataset.pname];
+      const real = el.dataset && el.dataset.select ? el.querySelector('select') : el;
+      if (real.type === 'checkbox') real.checked = !!v;
+      else if ([...real.options || []].some(o => o.value === String(v))) real.value = v;
+      else if (!real.options) real.value = v == null ? '' : v;
+    }
+  }
+
+  async function loadTemplate(wid) {
     formArea.innerHTML = '';
     submitRow.hidden = true;
-    if (!wfSelect.value) return;
+    if (!wid) return;
     try {
-      tpl = await api('/api/workflows/' + wfSelect.value);
+      tpl = await jsonFetch('/api/workflows/' + wid);
       renderForm(formArea, tpl);
+      const draft = localStorage.getItem(draftKey(tpl.id));
+      if (draft) {
+        try {
+          const d = JSON.parse(draft);
+          applyDraft(d.values || {});
+          $('countInput').value = d.count || 1;
+          if ($('seedRandom')) $('seedRandom').checked = d.random !== false;
+        } catch (e) { /* 草稿损坏则忽略 */ }
+      }
       submitRow.hidden = false;
+      localStorage.setItem('comfyweb.lastwf', String(tpl.id));
     } catch (e) {
       formArea.innerHTML = `<p class="task-err">模板加载失败: ${esc(e.message)}</p>`;
     }
-  });
+  }
+
+  wfSelect.addEventListener('change', () => loadTemplate(wfSelect.value));
+  formArea.addEventListener('input', () => saveDraft());
+  formArea.addEventListener('change', () => saveDraft());
 
   $('btnGenerate').addEventListener('click', async () => {
     const btn = $('btnGenerate');
@@ -37,7 +77,7 @@
     }
     btn.classList.add('is-loading');
     try {
-      const res = await api('/api/generate', {
+      const res = await jsonFetch('/api/generate', {
         method: 'POST',
         body: JSON.stringify({
           workflow_id: parseInt(wfSelect.value, 10),
@@ -48,6 +88,7 @@
       });
       for (const id of res.task_ids) pollIds.add(id);
       if (res.error) { errBox.textContent = res.error; errBox.hidden = false; }
+      saveDraft();
       startPoll();
       refreshTasks();
     } catch (e) {
@@ -57,6 +98,45 @@
       btn.classList.remove('is-loading');
     }
   });
+
+  /* ---------- 再次生成:把任务参数回填到表单 ---------- */
+
+  async function refillFromTask(taskId) {
+    if (!tpl) return;
+    let t;
+    try {
+      t = (await jsonFetch('/api/tasks/' + taskId)).task;
+    } catch (e) { alert(e.message); return; }
+    const byLabel = {};
+    for (const p of t.params || []) byLabel[p.label] = p.value;
+    let matched = 0;
+    for (const el of formArea.querySelectorAll('[data-pname]')) {
+      if (el.type === 'hidden') continue;
+      const def = (tpl.params || []).find(p => p.name === el.dataset.pname);
+      if (!def || !(def.label in byLabel)) continue;
+      const v = byLabel[def.label];
+      const real = el.dataset && el.dataset.select ? el.querySelector('select') : el;
+      if (real.type === 'checkbox') real.checked = !!v;
+      else if (real.options && ![...real.options].some(o => o.value === String(v))) continue;
+      else real.value = v == null ? '' : v;
+      matched++;
+    }
+    if (t.seed != null) {
+      const el = [...formArea.querySelectorAll('[data-pname]')].find(e => {
+        const real = e.dataset && e.dataset.select ? e.querySelector('select') : e;
+        return real.type === 'number' && real.closest('.seed-row');
+      });
+      if (el) {
+        const real = el.dataset && el.dataset.select ? el.querySelector('select') : el;
+        real.value = t.seed;
+        const cb = $('seedRandom');
+        if (cb) cb.checked = false;
+        matched++;
+      }
+    }
+    saveDraft();
+    formArea.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
 
   /* ---------- 任务列表 ---------- */
 
@@ -112,33 +192,44 @@
       }
       d.appendChild(g);
     }
+    const row = document.createElement('div');
+    row.style.cssText = 'margin-top:.5rem;display:flex;gap:.5rem';
     if (t.status === 'queued' || t.status === 'running') {
-      const row = document.createElement('div');
-      row.style.marginTop = '.5rem';
       const b = document.createElement('button');
       b.className = 'button is-small';
       b.textContent = '取消';
       b.addEventListener('click', async () => {
         b.classList.add('is-loading');
-        try { await api(`/api/tasks/${t.id}/cancel`, { method: 'POST' }); refreshTasks(); }
+        try { await jsonFetch(`/api/tasks/${t.id}/cancel`, { method: 'POST' }); refreshTasks(); }
         catch (e) { b.classList.remove('is-loading'); alert(e.message); }
       });
       row.appendChild(b);
-      d.appendChild(row);
+    } else if (t.status === 'done' && t.workflow_id) {
+      const b = document.createElement('button');
+      b.className = 'button is-small is-link is-light';
+      b.textContent = '再来一次';
+      b.addEventListener('click', () => refillFromTask(t.id));
+      row.appendChild(b);
+      const a = document.createElement('a');
+      a.className = 'button is-small';
+      a.href = '/gallery';
+      a.textContent = '在画廊查看';
+      row.appendChild(a);
     }
+    if (row.children.length) d.appendChild(row);
     return d;
   }
 
   async function refreshTasks() {
     let ids = [...pollIds];
     if (!ids.length) {
-      const recent = await api('/api/tasks/recent?limit=8').catch(() => null);
+      const recent = await jsonFetch('/api/tasks/recent?limit=8').catch(() => null);
       if (!recent) return;
       renderCards(recent.tasks);
       pollIds = new Set(recent.tasks.filter(t => t.status === 'queued' || t.status === 'running').map(t => t.id));
       return;
     }
-    const res = await api('/api/tasks?ids=' + ids.join(',')).catch(() => null);
+    const res = await jsonFetch('/api/tasks?ids=' + ids.join(',')).catch(() => null);
     if (!res) return;
     renderCards(res.tasks);
     pollIds = new Set(res.tasks.filter(t => t.status === 'queued' || t.status === 'running').map(t => t.id));
@@ -148,7 +239,24 @@
     tasksPanel.hidden = false;
     if (!tasks.length) { taskList.innerHTML = '<p class="empty">暂无任务</p>'; return; }
     taskList.innerHTML = '';
-    for (const t of tasks) taskList.appendChild(taskCard(t));
+    for (const t of tasks) {
+      taskList.appendChild(taskCard(t));
+      if (lastStatus[t.id] && lastStatus[t.id] !== 'done' && t.status === 'done') notifyDone(t);
+      lastStatus[t.id] = t.status;
+    }
+  }
+
+  /* 完成提醒:震动 + 标题闪烁(页面在后台时) */
+  let flashTimer = null;
+  const baseTitle = document.title;
+  function notifyDone(t) {
+    if (navigator.vibrate) navigator.vibrate([150, 80, 150]);
+    if (!document.hidden || flashTimer) return;
+    let on = false, n = 0;
+    flashTimer = setInterval(() => {
+      document.title = (on = !on) ? '生成完成' : baseTitle;
+      if (++n >= 6) { clearInterval(flashTimer); flashTimer = null; document.title = baseTitle; }
+    }, 900);
   }
 
   function startPoll() {
@@ -161,6 +269,24 @@
       }
       refreshTasks();
     }, 2000);
+  }
+
+  /* 初始化:记住上次模板;支持 /?template=<id>&task=<id> 再次生成入口 */
+  const q = new URLSearchParams(location.search);
+  const last = localStorage.getItem('comfyweb.lastwf');
+  const want = q.get('template') || last;
+  if (want && [...wfSelect.options].some(o => o.value === want)) {
+    wfSelect.value = want;
+    loadTemplate(want).then(async () => {
+      const tid = q.get('task');
+      if (tid) {
+        try {
+          const t = (await jsonFetch('/api/tasks/' + tid)).task;
+          if (t.workflow_id === parseInt(want, 10)) await refillFromTask(tid);
+        } catch (e) { /* 忽略 */ }
+        history.replaceState(null, '', '/');
+      }
+    });
   }
 
   refreshTasks();
