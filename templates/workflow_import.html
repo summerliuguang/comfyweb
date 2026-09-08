@@ -81,19 +81,25 @@
 
   /* ---------- 从 ComfyUI 拉取 ---------- */
   async function loadRemote() {
+    const sel = $('remoteSelect');
     try {
       const d = await api('/api/remote/workflows');
-      const sel = $('remoteSelect');
       sel.innerHTML = '';
-      if (!d.workflows.length) {
-        sel.innerHTML = '<option value="">(ComfyUI 里没有已保存的工作流)</option>';
-        return;
+      const ph = document.createElement('option');
+      ph.value = ''; ph.textContent = d.workflows.length ? '— 选择工作流 —' : '(ComfyUI 里没有已保存的工作流)';
+      sel.appendChild(ph);
+      for (const n of d.workflows) {
+        const op = document.createElement('option');
+        op.value = encodeURIComponent(n);
+        op.textContent = n.replace(/\.json$/, '');
+        sel.appendChild(op);
       }
-      sel.innerHTML = '<option value="">— 选择工作流 —</option>' +
-        d.workflows.map(n => `<option value="${encodeURIComponent(n)}">${n.replace(/\.json$/, '')}</option>`).join('');
-      $('btnRemoteImport').disabled = false;
+      $('btnRemoteImport').disabled = d.workflows.length === 0;
     } catch (e) {
-      $('remoteSelect').innerHTML = `<option value="">(读取失败: ${e.message})</option>`;
+      sel.innerHTML = '';
+      const op = document.createElement('option');
+      op.value = ''; op.textContent = `(读取失败: ${e.message})`;
+      sel.appendChild(op);
     }
   }
   $('btnRemoteRefresh').addEventListener('click', loadRemote);

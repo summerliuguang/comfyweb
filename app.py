@@ -5,7 +5,7 @@ import re
 import threading
 import time
 from datetime import datetime
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import quote as urlquote, urlencode, urlsplit
 from uuid import uuid4
 
 from flask import (Flask, Response, jsonify, render_template, request,
@@ -34,6 +34,9 @@ def cached(key, ttl, fn):
         hit = _cache.get(key)
         if hit and now - hit[0] < ttl:
             return hit[1]
+        if len(_cache) > 500:  # 防长驻进程内存缓慢增长:顺带清掉早已过期的项
+            for k in [k for k, (ts, _) in _cache.items() if now - ts > 600]:
+                _cache.pop(k, None)
     val = fn()
     with _cache_lock:
         _cache[key] = (now, val)
@@ -303,9 +306,10 @@ def civitai_image_proxy():
 
 @app.get("/settings")
 def page_settings():
+    token = db.get_setting("civitai_token")
     return render_template("settings.html", comfy_url=db.get_setting("comfy_url"),
                            civitai_proxy=db.get_setting("civitai_proxy"),
-                           civitai_token=db.get_setting("civitai_token"),
+                           civitai_token_set=bool(token),
                            civitai_nsfw=db.get_setting("civitai_nsfw") == "1",
                            active="settings")
 
@@ -321,7 +325,12 @@ def api_save_settings():
     if "civitai_proxy" in data:
         db.set_setting("civitai_proxy", (data.get("civitai_proxy") or "").strip())
     if "civitai_token" in data:
-        db.set_setting("civitai_token", (data.get("civitai_token") or "").strip())
+        # 留空表示保持不变,避免 Token 明文回显到页面
+        tok = (data.get("civitai_token") or "").strip()
+        if tok:
+            db.set_setting("civitai_token", tok)
+    if data.get("civitai_token_clear"):
+        db.set_setting("civitai_token", "")
     if "civitai_nsfw" in data:
         db.set_setting("civitai_nsfw", "1" if data.get("civitai_nsfw") else "0")
     if "record_keep" in data:
@@ -670,7 +679,9 @@ def api_tasks():
     by_task = {}
     for im in img_rows:
         by_task.setdefault(im["task_id"], []).append(im)
-    qpos = queue_positions()
+    qpos = {}
+    if any(t["status"] == "queued" for t in rows):
+        qpos = queue_positions()  # 仅在有排队任务时查询,避免空轮询打 ComfyUI
     tasks = []
     for t in rows:
         item = serialize_task(t, by_task.get(t["id"], []))
@@ -743,7 +754,12 @@ def image_proxy():
         return err(e, 502)
     headers = {"Cache-Control": "public, max-age=604800"}
     if request.args.get("dl"):
-        headers["Content-Disposition"] = f'attachment; filename="comfyweb_{uuid4().hex[:8]}_{filename}"'
+        # 中文前缀的文件名不能直接进 HTTP 头,按 RFC 5987 提供 UTF-8 文件名
+        ext = os.path.splitext(filename)[1] or ".png"
+        ascii_name = f"comfyweb_{uuid4().hex[:8]}{ext}"
+        utf8_name = urlquote(filename)
+        headers["Content-Disposition"] = (
+            f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{utf8_name}')
     return Response(stream_with_context(r.iter_content(16384)),
                     content_type=r.headers.get("Content-Type", "image/png"),
                     headers=headers)
