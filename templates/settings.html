@@ -37,12 +37,13 @@
   </div>
   <div class="field">
     <label class="label">API Token（可选）</label>
-    <input class="input" id="civToken" type="password" value="{{ civitai_token }}" placeholder="civitai.com 账户设置里生成">
-    <p class="hint">部分模型下载与更高速率限制需要。</p>
+    <input class="input" id="civToken" type="password" placeholder="{{ '已配置(留空保持不变,输入新值覆盖)' if civitai_token_set else 'civitai.com 账户设置里生成' }}">
+    <p class="hint">部分模型下载与更高速率限制需要。Token 保存后不再回显。</p>
   </div>
   <label class="checkbox" style="font-size:.88rem"><input type="checkbox" id="civNsfw" {{ 'checked' if civitai_nsfw }}> 显示 NSFW 内容</label>
   <div class="buttons" style="margin-top:.7rem">
     <button class="button is-link" id="btnCivSave">保存 Civitai 设置</button>
+    {% if civitai_token_set %}<button class="button is-danger is-light" id="btnTokenClear">清除 Token</button>{% endif %}
   </div>
   <p class="task-err" id="civError" hidden></p>
 </div>
@@ -139,6 +140,15 @@
       $('keepHint').textContent = '已保存';
       $('keepHint').hidden = false;
       setTimeout(() => { $('keepHint').hidden = true; }, 2500);
+    } catch (e) { alert(e.message); }
+  });
+
+  $('btnTokenClear').addEventListener('click', async () => {
+    try {
+      await api('/api/settings', { method: 'POST', body: JSON.stringify({ civitai_token_clear: true }) });
+      $('civToken').value = '';
+      $('btnTokenClear').hidden = true;
+      $('civToken').placeholder = 'civitai.com 账户设置里生成';
     } catch (e) { alert(e.message); }
   });
 
