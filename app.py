@@ -12,6 +12,7 @@ from flask import (Flask, Response, jsonify, render_template, request,
                    stream_with_context)
 
 import db
+import civitai
 import workflow as wfmod
 from comfy_client import ComfyError, client
 
@@ -217,9 +218,82 @@ def page_gallery_detail(img_id):
     return render_template("gallery_detail.html", item=item, active="gallery")
 
 
+@app.get("/models")
+def page_models():
+    return render_template("civitai.html", civ_type="Checkpoint", title="模型",
+                           active="models")
+
+
+@app.get("/loras")
+def page_loras():
+    return render_template("civitai.html", civ_type="LORA", title="LoRA",
+                           active="loras")
+
+
+# ---------- Civitai(模型/LoRA 信息) ----------
+
+LOCAL_MODEL_DIRS = {"checkpoints": "checkpoints", "loras": "loras",
+                    "diffusion_models": "diffusion_models", "vae": "vae"}
+
+CIVITAI_TYPES = {"Checkpoint", "LORA"}
+
+
+@app.get("/api/civitai/search")
+def api_civitai_search():
+    q = request.args.get("q", "").strip()
+    ctype = request.args.get("type", "Checkpoint")
+    if ctype not in CIVITAI_TYPES:
+        return err("无效的类型")
+    try:
+        return jsonify(civitai.search(
+            q=q or None, types=(ctype,), base=request.args.get("base") or None,
+            sort=request.args.get("sort") or "Most Downloaded",
+            cursor=request.args.get("cursor") or None,
+            nsfw=db.get_setting("civitai_nsfw") == "1"))
+    except civitai.CivitaiError as e:
+        return err(e, 502)
+
+
+@app.get("/api/civitai/model/<int:mid>")
+def api_civitai_model(mid):
+    try:
+        return jsonify(civitai.get_model(mid))
+    except civitai.CivitaiError as e:
+        return err(e, 502)
+
+
+@app.get("/api/local/models")
+def api_local_models():
+    """本机(ComfyUI 侧)已安装的模型文件列表。"""
+    folder = request.args.get("type", "checkpoints")
+    if folder not in LOCAL_MODEL_DIRS:
+        return err("无效的类型")
+    try:
+        files = cached("models:" + folder, 120, lambda f=folder: client.models(f))
+    except ComfyError as e:
+        return err(e, 502)
+    return {"files": sorted(str(f) for f in files)}
+
+
+@app.get("/civimg")
+def civitai_image_proxy():
+    """civitai CDN 图片代理(局域网设备一般无法直连 civitai)。"""
+    u = request.args.get("u", "")
+    try:
+        r = civitai.fetch_image(u)
+    except civitai.CivitaiError as e:
+        return err(e, 502)
+    return Response(stream_with_context(r.iter_content(16384)),
+                    content_type=r.headers.get("Content-Type", "image/jpeg"),
+                    headers={"Cache-Control": "public, max-age=604800"})
+
+
 @app.get("/settings")
 def page_settings():
     return render_template("settings.html", comfy_url=db.get_setting("comfy_url"),
+                           civitai_proxy=db.get_setting("civitai_proxy"),
+                           civitai_token=db.get_setting("civitai_token"),
+                           civitai_nsfw=db.get_setting("civitai_nsfw") == "1",
                            active="settings")
 
 
@@ -229,7 +303,15 @@ def page_settings():
 def api_save_settings():
     data = request.get_json(silent=True) or {}
     url = (data.get("comfy_url") or "").strip().rstrip("/")
-    db.set_setting("comfy_url", url)
+    if "comfy_url" in data:
+        db.set_setting("comfy_url", url)
+    if "civitai_proxy" in data:
+        db.set_setting("civitai_proxy", (data.get("civitai_proxy") or "").strip())
+    if "civitai_token" in data:
+        db.set_setting("civitai_token", (data.get("civitai_token") or "").strip())
+    if "civitai_nsfw" in data:
+        db.set_setting("civitai_nsfw", "1" if data.get("civitai_nsfw") else "0")
+    civitai.clear_cache()
     return {"ok": True}
 
 
