@@ -1,0 +1,90 @@
+"""API 冒烟测试:进程内启动 mock ComfyUI,走 app 完整请求链。"""
+import sys
+import time
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import db
+from tests import mock_comfy
+
+# 简单 txt2img API 工作流
+API_WF = {
+    "3": {"class_type": "KSampler", "inputs": {
+        "cfg": 7, "denoise": 1, "latent_image": ["5", 0], "model": ["4", 0],
+        "negative": ["7", 0], "positive": ["6", 0], "sampler_name": "euler",
+        "scheduler": "normal", "seed": 42, "steps": 4}},
+    "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "v1-5-pruned.safetensors"}},
+    "5": {"class_type": "EmptyLatentImage", "inputs": {"batch_size": 1, "height": 512, "width": 512}},
+    "6": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["4", 1], "text": "masterpiece girl"}},
+    "7": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["4", 1], "text": "bad hands"}},
+    "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["4", 2]}},
+    "9": {"class_type": "SaveImage", "inputs": {"filename_prefix": "t", "images": ["8", 0]}},
+}
+
+
+def setUpModule():
+    mock_comfy.start(5099)
+    time.sleep(1.2)
+    db.init_db()
+    db.set_setting("comfy_url", "http://127.0.0.1:5099")
+
+
+class ApiSmoke(unittest.TestCase):
+    def setUp(self):
+        import app
+        app.app.config["TESTING"] = True
+        self.c = app.app.test_client()
+        # 同源钩子:测试请求默认无 Origin 头,不会被拦
+
+    def test_full_generation_flow(self):
+        # 连接测试
+        r = self.c.post("/api/settings/test", json={})
+        self.assertEqual(r.status_code, 200)
+        # 解析
+        r = self.c.post("/api/workflows/parse", json={"text": __import__("json").dumps(API_WF)})
+        self.assertEqual(r.status_code, 200)
+        data = r.get_json()
+        self.assertEqual(data["node_count"], 7)
+        self.assertEqual(data["batch_node"], "5")
+        # 保存
+        r = self.c.post("/api/workflows", json={
+            "name": "冒烟模板", "workflow": API_WF, "params": data["params"],
+            "batch_node": data["batch_node"]})
+        self.assertEqual(r.status_code, 200)
+        wid = r.get_json()["id"]
+        # 模板读取:动态模型选项来自 mock
+        g = self.c.get(f"/api/workflows/{wid}").get_json()
+        ckpt = next(p for p in g["params"] if p["name"] == "4:ckpt_name")
+        self.assertIn("dreamshaperXL.safetensors", ckpt["options"])
+        # 生成 count=2(batch_size 路径),轮询到完成(mock 2 秒后出结果)
+        r = self.c.post("/api/generate", json={
+            "workflow_id": wid, "values": {"6:text": "a cat"}, "count": 2, "random_seed": True})
+        self.assertEqual(r.status_code, 200)
+        tid = r.get_json()["task_ids"][0]
+        task = None
+        for _ in range(20):
+            time.sleep(1)
+            task = self.c.get(f"/api/tasks?ids={tid}").get_json()["tasks"][0]
+            if task["status"] not in ("queued", "running"):
+                break
+        self.assertEqual(task["status"], "done")
+        self.assertEqual(len(task["images"]), 2)
+        # 画廊出现该任务图片
+        gal = self.c.get("/gallery")
+        self.assertEqual(gal.status_code, 200)
+        self.assertIn("a cat", gal.get_data(as_text=True))
+        # 清理
+        self.c.post(f"/api/workflows/{wid}/delete")
+
+    def test_cross_origin_post_blocked(self):
+        r = self.c.post("/api/settings", json={}, headers={"Origin": "http://evil.example"})
+        self.assertEqual(r.status_code, 403)
+        # test_client 的 Host 是 localhost,同源 Origin 应放行
+        r = self.c.post("/api/settings", json={}, headers={"Origin": "http://localhost"})
+        self.assertEqual(r.status_code, 200)
+
+
+if __name__ == "__main__":
+    unittest.main()

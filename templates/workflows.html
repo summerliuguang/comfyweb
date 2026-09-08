@@ -7,22 +7,29 @@
 </div>
 
 <div class="panel">
+  <h2 class="title is-5">ComfyUI 服务器工作流 <span class="tag is-light" id="srvCount">…</span></h2>
+  <p class="hint" style="margin-bottom:.6rem">自动列出 ComfyUI 里「保存」过的工作流;「快速导入」按默认参数直接入库,「评审导入」先确认参数再保存。</p>
+  <div id="srvBox"><p class="empty">读取中…</p></div>
+  <p class="task-err" id="srvError" hidden></p>
+</div>
+
+<div class="panel">
+  <h2 class="title is-5">我的模板</h2>
   {% if not workflows %}
   <div class="empty">
-    还没有工作流模板。<br><br>
-    在 ComfyUI 里搭好工作流后,菜单选择 <b>工作流 → 导出(API)</b>,<br>
-    把导出的 JSON 粘贴到 <a href="/workflows/import">导入页</a> 即可。
+    还没有工作流模板。从上方「ComfyUI 服务器工作流」一键导入,<br>
+    或在 ComfyUI 里菜单 <b>工作流 → 导出(API)</b> 后到 <a href="/workflows/import">导入页</a> 粘贴。
   </div>
   {% else %}
-  <table class="param-table">
+  <table class="param-table mobile-cards">
     <thead><tr><th>名称</th><th class="w-check">启用</th><th>创建时间</th><th style="width:9rem"></th></tr></thead>
     <tbody>
       {% for w in workflows %}
       <tr>
-        <td style="font-weight:600">{{ w.name }}</td>
-        <td class="w-check"><input type="checkbox" class="w-enabled" data-id="{{ w.id }}" {{ 'checked' if w.enabled }}></td>
-        <td class="task-meta">{{ w.created_at }}</td>
-        <td>
+        <td style="font-weight:600" data-label="名称">{{ w.name }}</td>
+        <td class="w-check" data-label="启用"><input type="checkbox" class="w-enabled" data-id="{{ w.id }}" {{ 'checked' if w.enabled }}></td>
+        <td class="task-meta" data-label="创建时间">{{ w.created_at }}</td>
+        <td data-label="操作">
           <div class="buttons" style="justify-content:flex-end;margin:0">
             <a class="button is-small" href="/workflows/{{ w.id }}/edit">编辑</a>
             <button class="button is-small is-danger is-light w-del" data-id="{{ w.id }}" data-name="{{ w.name }}">删除</button>
@@ -37,22 +44,97 @@
 {% endblock %}
 {% block scripts %}
 <script>
-document.querySelectorAll('.w-enabled').forEach(cb => {
-  cb.addEventListener('change', async () => {
-    const r = await fetch('/api/workflows/' + cb.dataset.id, {
+/* 服务器工作流列表 + 一键导入 */
+(function () {
+  const box = document.getElementById('srvBox');
+
+  async function api(url, body) {
+    const r = await fetch(url, body ? {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled: cb.checked })
+      body: JSON.stringify(body)
+    } : {});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || r.status);
+    return d;
+  }
+
+  async function load() {
+    try {
+      const d = await api('/api/remote/workflows');
+      document.getElementById('srvCount').textContent = d.workflows.length + ' 个';
+      box.innerHTML = '';
+      if (!d.workflows.length) {
+        box.innerHTML = '<p class="empty">ComfyUI 里还没有「保存」过的工作流</p>';
+        return;
+      }
+      for (const n of d.workflows) {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:.6rem;padding:.45rem 0;border-bottom:1px solid var(--line);flex-wrap:wrap';
+        const nm = document.createElement('span');
+        nm.textContent = n.replace(/\.json$/, '');
+        nm.style.cssText = 'font-size:.88rem;font-weight:600;flex:1;min-width:10rem';
+        row.appendChild(nm);
+        const btns = document.createElement('div');
+        btns.style.cssText = 'display:flex;gap:.4rem';
+        const quick = document.createElement('button');
+        quick.className = 'button is-small is-link is-light';
+        quick.textContent = '快速导入';
+        quick.addEventListener('click', async () => {
+          quick.classList.add('is-loading');
+          try {
+            const r = await api('/api/workflows/import_remote_save', { name: n });
+            let warn = r.warnings && r.warnings.length ? '(提示: ' + r.warnings.join(';') + ')' : '';
+            location.href = '/workflows?imported=' + encodeURIComponent(r.name + warn);
+          } catch (e) {
+            quick.classList.remove('is-loading');
+            alert('导入失败: ' + e.message + '\n可改用「评审导入」或粘贴「导出(API)」JSON');
+          }
+        });
+        const review = document.createElement('button');
+        review.className = 'button is-small';
+        review.textContent = '评审导入';
+        review.addEventListener('click', () => {
+          sessionStorage.setItem('import_remote', n);
+          location.href = '/workflows/import';
+        });
+        btns.append(quick, review);
+        row.appendChild(btns);
+        box.appendChild(row);
+      }
+    } catch (e) {
+      box.innerHTML = `<p class="task-err">读取失败: ${e.message}(检查设置页的 ComfyUI 地址)</p>`;
+    }
+  }
+  load();
+
+  /* 快速导入成功后的提示条 */
+  const ok = new URLSearchParams(location.search).get('imported');
+  if (ok) {
+    const tip = document.createElement('p');
+    tip.className = 'notification is-link is-light';
+    tip.style.cssText = 'margin:0 0 .8rem;font-size:.85rem';
+    tip.textContent = '已导入模板: ' + ok;
+    document.querySelector('.page-head').after(tip);
+    history.replaceState(null, '', '/workflows');
+  }
+
+  document.querySelectorAll('.w-enabled').forEach(cb => {
+    cb.addEventListener('change', async () => {
+      const r = await fetch('/api/workflows/' + cb.dataset.id, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: cb.checked })
+      });
+      if (!r.ok) { cb.checked = !cb.checked; const d = await r.json().catch(() => ({})); alert(d.error || r.status); }
     });
-    if (!r.ok) { cb.checked = !cb.checked; const d = await r.json().catch(() => ({})); alert(d.error || r.status); }
   });
-});
-document.querySelectorAll('.w-del').forEach(btn => {
-  btn.addEventListener('click', async () => {
-    if (!confirm(`删除模板「${btn.dataset.name}」?生成记录与图片不受影响。`)) return;
-    const r = await fetch(`/api/workflows/${btn.dataset.id}/delete`, { method: 'POST' });
-    if (r.ok) location.reload();
-    else { const d = await r.json().catch(() => ({})); alert(d.error || r.status); }
+  document.querySelectorAll('.w-del').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm(`删除模板「${btn.dataset.name}」?生成记录与图片不受影响。`)) return;
+      const r = await fetch(`/api/workflows/${btn.dataset.id}/delete`, { method: 'POST' });
+      if (r.ok) location.reload();
+      else { const d = await r.json().catch(() => ({})); alert(d.error || r.status); }
+    });
   });
-});
+})();
 </script>
 {% endblock %}

@@ -44,6 +44,7 @@ class ComfyClient:
         self._lock = threading.Lock()
         self.ws_state = "未启动"
         self.last_event_ts = 0.0
+        self.on_connect = None  # WS 连上后回调(后台线程执行),供上层预热缓存
 
     # ---------- HTTP ----------
 
@@ -77,10 +78,18 @@ class ComfyClient:
 
     def get_json(self, path, params=None, timeout=15):
         url = self.base_url() + path
-        try:
-            r = requests.get(url, params=params, timeout=timeout)
-        except requests.RequestException as e:
-            raise ComfyError(f"连接 ComfyUI 失败: {e.__class__.__name__}") from e
+        last_exc = None
+        for attempt in range(3):  # ComfyUI 重启窗口期会出现瞬时连接失败,短暂重试
+            try:
+                r = requests.get(url, params=params, timeout=timeout)
+                break
+            except requests.RequestException as e:
+                last_exc = e
+                if attempt < 2:
+                    time.sleep(0.8)
+        else:
+            detail = str(last_exc) or last_exc.__class__.__name__
+            raise ComfyError(f"连接 ComfyUI 失败: {detail}") from last_exc
         if r.status_code != 200:
             raise ComfyError(f"ComfyUI 返回 {r.status_code}: {path}")
         return r.json()
@@ -252,6 +261,8 @@ class ComfyClient:
             try:
                 ws = websocket.create_connection(ws_url, timeout=10)
                 self.ws_state = "已连接"
+                if self.on_connect:
+                    threading.Thread(target=self.on_connect, daemon=True).start()
                 while not self._stop.is_set():
                     try:
                         msg = ws.recv()

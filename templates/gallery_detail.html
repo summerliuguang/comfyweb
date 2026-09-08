@@ -28,6 +28,10 @@
     {% endfor %}
   </table>
   <div class="buttons" style="margin-top:.9rem">
+    {% if item.prev_id %}<a class="button is-small" href="/gallery/image/{{ item.prev_id }}">← 上一张</a>{% endif %}
+    {% if item.next_id %}<a class="button is-small" href="/gallery/image/{{ item.next_id }}">下一张 →</a>{% endif %}
+  </div>
+  <div class="buttons" style="margin-top:.9rem">
     <a class="button is-link" href="{{ item.download }}" download>下载原图</a>
     {% if item.workflow_id %}
     <a class="button is-light" href="/?template={{ item.workflow_id }}&task={{ item.id }}">再次生成</a>

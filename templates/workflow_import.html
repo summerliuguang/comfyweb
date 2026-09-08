@@ -165,6 +165,20 @@
   });
 
   loadRemote();
+
+  /* 从工作流页「评审导入」跳转过来:自动选中并拉取 */
+  const handoff = sessionStorage.getItem('import_remote');
+  if (handoff) {
+    sessionStorage.removeItem('import_remote');
+    loadRemote().then(() => {
+      const sel = $('remoteSelect');
+      const opt = [...sel.options].find(o => o.value === encodeURIComponent(handoff) || o.value === handoff);
+      if (opt) {
+        sel.value = opt.value;
+        $('btnRemoteImport').click();
+      }
+    });
+  }
 })();
 </script>
 {% endblock %}

@@ -46,12 +46,21 @@ def err(msg, code=400):
 
 @app.before_request
 def same_origin_only():
-    """控制接口只接受同源 POST(nginx 层另有 basic auth)。"""
+    """控制接口只接受同源 POST(nginx 层另有 basic auth)。
+
+    经 nginx 反代时 Host 可能不带端口(取决于 proxy_set_header),因此同时接受
+    X-Forwarded-Port 指出的外部端口形式。
+    """
     if request.method == "POST":
         origin = request.headers.get("Origin") or request.headers.get("Referer")
         if origin:
             netloc = urlsplit(origin).netloc
-            if netloc and netloc != request.host:
+            allowed = {request.host}
+            host_only = request.host.rsplit(":", 1)[0] if ":" in request.host else request.host
+            fwd_port = request.headers.get("X-Forwarded-Port")
+            if fwd_port:
+                allowed.add(f"{host_only}:{fwd_port}")
+            if netloc and netloc not in allowed:
                 return err("拒绝跨源请求", 403)
 
 
@@ -215,6 +224,10 @@ def page_gallery_detail(img_id):
     item["params"] = json.loads(row["params_json"] or "[]")
     item["url"] = image_url(row["filename"], row["subfolder"], row["type"])
     item["download"] = image_url(row["filename"], row["subfolder"], row["type"], dl=True)
+    prev_row = db.query_one("SELECT id FROM images WHERE id < ? ORDER BY id DESC LIMIT 1", (img_id,))
+    next_row = db.query_one("SELECT id FROM images WHERE id > ? ORDER BY id LIMIT 1", (img_id,))
+    item["prev_id"] = prev_row["id"] if prev_row else None
+    item["next_id"] = next_row["id"] if next_row else None
     return render_template("gallery_detail.html", item=item, active="gallery")
 
 
@@ -311,6 +324,12 @@ def api_save_settings():
         db.set_setting("civitai_token", (data.get("civitai_token") or "").strip())
     if "civitai_nsfw" in data:
         db.set_setting("civitai_nsfw", "1" if data.get("civitai_nsfw") else "0")
+    if "record_keep" in data:
+        try:
+            keep = max(20, min(5000, int(data.get("record_keep") or 200)))
+        except (TypeError, ValueError):
+            keep = 200
+        db.set_setting("record_keep", str(keep))
     civitai.clear_cache()
     return {"ok": True}
 
@@ -377,42 +396,75 @@ def api_workflow_parse():
 
 @app.get("/api/remote/workflows")
 def api_remote_workflows():
-    """列出 ComfyUI 用户目录里已保存的工作流文件。"""
+    """列出 ComfyUI 用户目录里已保存的工作流文件(预热后直接命中缓存)。"""
     try:
-        names = client.userdata_list("workflows")
+        names = remote_workflow_names()
     except ComfyError as e:
         return err(e, 502)
     return {"workflows": sorted(str(n) for n in names if str(n).endswith(".json"))}
 
 
-@app.post("/api/workflows/import_remote")
-def api_workflow_import_remote():
-    """拉取 ComfyUI 里已保存的工作流,UI 格式转 API 格式后走导入评审。"""
-    data = request.get_json(silent=True) or {}
-    name = (data.get("name") or "").strip()
+def _convert_remote(name):
+    """拉取并转换服务器工作流,返回 (tpl, warnings)。文件名非法抛 WorkflowParseError。
+
+    兼容两种存法:UI 格式(界面「保存」)与 API 格式(用户把「导出(API)」存进目录)。
+    """
     if not name or "/" in name or "\\" in name or ".." in name or not name.endswith(".json"):
-        return err("无效的工作流文件名")
-    try:
-        uiwf = client.userdata_read("workflows/" + name)
-    except ComfyError as e:
-        return err(e, 502)
-    classes = {n.get("type") for n in (uiwf.get("nodes") or []) if n.get("type")}
+        raise wfmod.WorkflowParseError("无效的工作流文件名")
+    uiwf = client.userdata_read("workflows/" + name)  # ComfyError 由调用方处理
+    if not isinstance(uiwf, dict):
+        raise wfmod.WorkflowParseError("工作流文件内容不是 JSON 对象")
+    is_ui = isinstance(uiwf.get("nodes"), list)
+    if is_ui:
+        classes = {n.get("type") for n in uiwf["nodes"] if n.get("type")}
+    else:
+        classes = {v.get("class_type") for v in uiwf.values()
+                   if isinstance(v, dict) and v.get("class_type")}
     object_info = fetch_object_info(classes)
-    missing = {c for c in classes if not object_info.get(c)}
-    try:
-        wf = wfmod.ui_to_api(uiwf, object_info)
-        tpl = wfmod.parse_workflow(wf, object_info)
-    except wfmod.WorkflowParseError as e:
-        return err(e)
+    wf = wfmod.ui_to_api(uiwf, object_info) if is_ui else uiwf
+    tpl = wfmod.parse_workflow(wf, object_info)
     for p in tpl["params"]:
         if p.get("widget") == "select" and p.get("dynamic"):
             p["options"] = dynamic_options_for(p)
     warnings = []
+    missing = classes - set(object_info)
     if missing:
         warnings.append("以下节点类未取到定义(可能缺插件): " + ", ".join(sorted(missing)))
-    return {"workflow": wf, "params": tpl["params"], "batch_node": tpl["batch_node"],
+    return tpl, warnings
+
+
+@app.post("/api/workflows/import_remote")
+def api_workflow_import_remote():
+    """拉取 ComfyUI 里已保存的工作流,UI 格式转 API 格式后走导入评审。"""
+    name = ((request.get_json(silent=True) or {}).get("name") or "").strip()
+    try:
+        tpl, warnings = _convert_remote(name)
+    except wfmod.WorkflowParseError as e:
+        return err(e)
+    except ComfyError as e:
+        return err(e, 502)
+    return {"workflow": tpl["workflow"], "params": tpl["params"], "batch_node": tpl["batch_node"],
             "node_count": tpl["node_count"], "warnings": warnings,
             "name": name[:-len(".json")]}
+
+
+@app.post("/api/workflows/import_remote_save")
+def api_workflow_import_remote_save():
+    """一键导入:拉取转换后按默认参数定义直接保存为模板。"""
+    name = ((request.get_json(silent=True) or {}).get("name") or "").strip()
+    try:
+        tpl, warnings = _convert_remote(name)
+    except wfmod.WorkflowParseError as e:
+        return err(e)
+    except ComfyError as e:
+        return err(e, 502)
+    display = name[:-len(".json")] or "未命名"
+    cur = db.execute("INSERT INTO workflows(name, filename) VALUES(?, '')", (display,))
+    wid = cur.lastrowid
+    save_tpl_file(wid, {"version": 1, "name": display, "workflow": tpl["workflow"],
+                        "params": tpl["params"], "batch_node": tpl["batch_node"]})
+    db.execute("UPDATE workflows SET filename=? WHERE id=?", (f"wf_{wid}.json", wid))
+    return {"ok": True, "id": wid, "name": display, "warnings": warnings}
 
 
 @app.post("/api/workflows")
@@ -482,6 +534,18 @@ def api_workflow_delete(wid):
 
 # ---------- 生成 ----------
 
+def prune_tasks():
+    """按设置保留最近 N 条任务记录,更早的连图片记录一起清理。"""
+    try:
+        keep = max(20, int(db.get_setting("record_keep") or "200"))
+    except ValueError:
+        keep = 200
+    row = db.query_one("SELECT id FROM tasks ORDER BY id DESC LIMIT 1 OFFSET ?",
+                       (keep - 1,))
+    if row:
+        db.execute("DELETE FROM tasks WHERE id <= ?", (row["id"],))
+
+
 def params_display(tpl, values, seed):
     items = []
     for p in tpl.get("params") or []:
@@ -533,6 +597,7 @@ def api_generate():
              count if use_batch else 1))
         task_ids.append(cur.lastrowid)
     client.ensure_ws()
+    prune_tasks()
     return {"task_ids": task_ids, "error": "\n".join(errors)}
 
 
@@ -577,6 +642,21 @@ def reconcile_active_tasks(rows):
                 pass
 
 
+def queue_positions():
+    """{prompt_id: 排队序号(1 起)},2 秒缓存避免每次轮询都打 ComfyUI。"""
+    def _fetch():
+        try:
+            return client.queue()
+        except ComfyError:
+            return {}
+    q = cached("queue", 2, _fetch)
+    out = {}
+    for i, it in enumerate(q.get("queue_pending") or []):
+        if isinstance(it, list) and len(it) > 1:
+            out[str(it[1])] = i + 1
+    return out
+
+
 @app.get("/api/tasks")
 def api_tasks():
     ids = [int(x) for x in (request.args.get("ids") or "").split(",") if x.strip().isdigit()]
@@ -590,7 +670,14 @@ def api_tasks():
     by_task = {}
     for im in img_rows:
         by_task.setdefault(im["task_id"], []).append(im)
-    return {"tasks": [serialize_task(t, by_task.get(t["id"], [])) for t in rows]}
+    qpos = queue_positions()
+    tasks = []
+    for t in rows:
+        item = serialize_task(t, by_task.get(t["id"], []))
+        if t["status"] == "queued" and t["prompt_id"]:
+            item["queue_pos"] = qpos.get(t["prompt_id"])
+        tasks.append(item)
+    return {"tasks": tasks}
 
 
 @app.get("/api/tasks/recent")
@@ -745,6 +832,39 @@ def migrate_tpl_filenames():
 db.init_db()
 migrate_tpl_filenames()
 client.ensure_ws()
+
+
+# ---------- ComfyUI 数据预热(WS 连上后自动执行) ----------
+
+_last_warm = [0.0]
+_warm_lock = threading.Lock()
+
+
+def warm_caches():
+    """连上 ComfyUI 后后台拉取模型列表/服务器工作流,页面打开即有数据。"""
+    now = time.time()
+    with _warm_lock:
+        if now - _last_warm[0] < 60:
+            return
+        _last_warm[0] = now
+    if not db.get_setting("comfy_url"):
+        return
+    for folder in LOCAL_MODEL_DIRS:
+        try:
+            cached("models:" + folder, 120, lambda f=folder: client.models(f))
+        except ComfyError:
+            continue
+    try:
+        remote_workflow_names()
+    except ComfyError:
+        pass
+
+
+def remote_workflow_names():
+    return cached("udwf:list", 60, lambda: client.userdata_list("workflows"))
+
+
+client.on_connect = warm_caches
 
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=int(os.environ.get("PORT", "5012")), threaded=True)
