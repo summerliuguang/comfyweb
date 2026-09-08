@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}工作流 - ComfyWeb{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="title is-4">工作流</h1>
+  <a class="button is-link is-small" href="/workflows/import">导入模板</a>
+</div>
+
+<div class="panel">
+  {% if not workflows %}
+  <div class="empty">
+    还没有工作流模板。<br><br>
+    在 ComfyUI 里搭好工作流后,菜单选择 <b>工作流 → 导出(API)</b>,<br>
+    把导出的 JSON 粘贴到 <a href="/workflows/import">导入页</a> 即可。
+  </div>
+  {% else %}
+  <table class="param-table">
+    <thead><tr><th>名称</th><th class="w-check">启用</th><th>创建时间</th><th style="width:9rem"></th></tr></thead>
+    <tbody>
+      {% for w in workflows %}
+      <tr>
+        <td style="font-weight:600">{{ w.name }}</td>
+        <td class="w-check"><input type="checkbox" class="w-enabled" data-id="{{ w.id }}" {{ 'checked' if w.enabled }}></td>
+        <td class="task-meta">{{ w.created_at }}</td>
+        <td>
+          <div class="buttons" style="justify-content:flex-end;margin:0">
+            <a class="button is-small" href="/workflows/{{ w.id }}/edit">编辑</a>
+            <button class="button is-small is-danger is-light w-del" data-id="{{ w.id }}" data-name="{{ w.name }}">删除</button>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+document.querySelectorAll('.w-enabled').forEach(cb => {
+  cb.addEventListener('change', async () => {
+    const r = await fetch('/api/workflows/' + cb.dataset.id, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: cb.checked })
+    });
+    if (!r.ok) { cb.checked = !cb.checked; const d = await r.json().catch(() => ({})); alert(d.error || r.status); }
+  });
+});
+document.querySelectorAll('.w-del').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    if (!confirm(`删除模板「${btn.dataset.name}」?生成记录与图片不受影响。`)) return;
+    const r = await fetch(`/api/workflows/${btn.dataset.id}/delete`, { method: 'POST' });
+    if (r.ok) location.reload();
+    else { const d = await r.json().catch(() => ({})); alert(d.error || r.status); }
+  });
+});
+</script>
+{% endblock %}

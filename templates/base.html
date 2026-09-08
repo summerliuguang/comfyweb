@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>{% block title %}ComfyWeb{% endblock %}</title>
+<link rel="stylesheet" href="/static/vendor/bulma.min.css">
+<link rel="stylesheet" href="/static/css/skin.css">
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<div class="wrap">
+  {% include "_menu.html" %}
+  {% block content %}{% endblock %}
+</div>
+<script>
+/* 图片加载失败(如 ComfyUI 侧文件已清理)时替换为占位图,避免裂图 */
+document.addEventListener('error', function (e) {
+  var t = e.target;
+  if (t && t.tagName === 'IMG' && !t.dataset.err) {
+    t.dataset.err = '1';
+    t.src = 'data:image/svg+xml;utf8,' + encodeURIComponent(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96">' +
+      '<rect width="96" height="96" fill="#f1f3f8"/>' +
+      '<text x="48" y="50" font-size="11" text-anchor="middle" fill="#8a90a0">图片缺失</text></svg>');
+  }
+}, true);
+{% block bodyscript %}{% endblock %}
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

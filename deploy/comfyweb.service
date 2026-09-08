@@ -1,0 +1,15 @@
+[Unit]
+Description=ComfyWeb - ComfyUI 简易生成站
+After=network.target
+
+[Service]
+Type=simple
+User=youruser
+WorkingDirectory=/opt/comfyweb
+Environment=PORT=5012
+ExecStart=/opt/venv/bin/python /opt/comfyweb/app.py
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

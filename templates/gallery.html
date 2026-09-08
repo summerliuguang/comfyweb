@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}画廊 - ComfyWeb{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="title is-4">画廊 <span class="tag is-light">{{ total }} 张</span></h1>
+  <form method="get" action="/gallery" style="display:flex;gap:.4rem;flex:1;max-width:20rem">
+    <input class="input is-small" type="search" name="q" value="{{ q }}" placeholder="按提示词搜索">
+    <button class="button is-small is-link" type="submit">搜索</button>
+  </form>
+</div>
+
+<div class="panel">
+  {% if not items %}
+  <div class="empty">
+    {% if q %}没有匹配「{{ q }}」的图片。{% else %}还没有生成过图片。{% endif %}
+  </div>
+  {% else %}
+  <div class="gallery-grid">
+    {% for it in items %}
+    <a class="gitem" href="/gallery/image/{{ it.id }}">
+      <img src="{{ it.thumb }}" loading="lazy" alt="生成图片">
+      <div class="gmeta" title="{{ it.prompt_text }}">{{ it.prompt_text or it.workflow_name or '(无提示词)' }}</div>
+    </a>
+    {% endfor %}
+  </div>
+  {% if pages > 1 %}
+  <div class="pager">
+    {% if page > 1 %}<a class="button is-small" href="/gallery?q={{ q }}&page={{ page - 1 }}">上一页</a>{% endif %}
+    <span>第 {{ page }} / {{ pages }} 页</span>
+    {% if page < pages %}<a class="button is-small" href="/gallery?q={{ q }}&page={{ page + 1 }}">下一页</a>{% endif %}
+  </div>
+  {% endif %}
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}设置 - ComfyWeb{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="title is-4">设置</h1>
+</div>
+
+<div class="panel">
+  <h2 class="title is-5">ComfyUI 服务器</h2>
+  <div class="field">
+    <label class="label">服务器地址</label>
+    <input class="input" id="comfyUrl" type="text" value="{{ comfy_url }}" placeholder="http://192.168.x.x:8188" inputmode="url">
+    <p class="hint">局域网内 ComfyUI 主机的地址,例如 http://192.168.x.x:8188(仅支持内网地址)</p>
+  </div>
+  <div class="buttons">
+    <button class="button is-link" id="btnTest">保存并测试连接</button>
+    <span class="status" id="wsState">WS 状态: --</span>
+  </div>
+  <p class="task-err" id="testError" hidden></p>
+  <div id="serverInfo" hidden style="margin-top:.6rem">
+    <table class="kv">
+      <tr><td>ComfyUI 版本</td><td id="siVersion">--</td></tr>
+      <tr><td>显卡</td><td id="siDevice">--</td></tr>
+      <tr><td>显存占用</td><td id="siVram">--</td></tr>
+    </table>
+  </div>
+</div>
+
+<div class="panel">
+  <h2 class="title is-5">队列</h2>
+  <div class="buttons">
+    <button class="button is-small" id="btnQueueRefresh">刷新</button>
+    <button class="button is-small is-danger is-light" id="btnQueueClear">清空排队</button>
+    <button class="button is-small is-warning is-light" id="btnInterrupt">中断当前</button>
+  </div>
+  <div id="queueBox"><p class="empty">点击「刷新」查看队列</p></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+
+  async function api(url, opts) {
+    const r = await fetch(url, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts));
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || r.status);
+    return d;
+  }
+
+  $('btnTest').addEventListener('click', async () => {
+    $('testError').hidden = true;
+    $('btnTest').classList.add('is-loading');
+    try {
+      const d = await api('/api/settings/test', {
+        method: 'POST', body: JSON.stringify({ comfy_url: $('comfyUrl').value.trim() })
+      });
+      $('serverInfo').hidden = false;
+      $('siVersion').textContent = d.version + (d.python ? ' (Python ' + d.python + ')' : '');
+      $('siDevice').textContent = d.device;
+      $('siVram').textContent = d.vram;
+      loadWs();
+    } catch (e) {
+      $('testError').textContent = e.message;
+      $('testError').hidden = false;
+      $('serverInfo').hidden = true;
+    } finally {
+      $('btnTest').classList.remove('is-loading');
+    }
+  });
+
+  async function loadWs() {
+    try {
+      const d = await api('/api/status');
+      $('wsState').textContent = 'WS 状态: ' + d.ws;
+    } catch (e) { /* 忽略 */ }
+  }
+
+  async function loadQueue() {
+    const box = $('queueBox');
+    try {
+      const d = await api('/api/queue');
+      const lines = [];
+      const run = d.queue_running.length, pend = d.queue_pending.length;
+      if (!run && !pend) { box.innerHTML = '<p class="empty">队列是空的</p>'; return; }
+      let html = '<table class="kv">';
+      if (run) html += `<tr><td>执行中</td><td>${d.queue_running.map(x =>
+        x.task_id ? `任务 #${x.task_id}` : '其他来源 ' + (x.prompt_id || '').slice(0, 8)).join(', ')}</td></tr>`;
+      if (pend) html += `<tr><td>排队等待</td><td>${d.queue_pending.length} 个` +
+        (d.queue_pending.some(x => x.task_id) ? `(含本站任务 ${d.queue_pending.filter(x => x.task_id).length} 个)` : '') + '</td></tr>';
+      html += '</table>';
+      box.innerHTML = html;
+    } catch (e) {
+      box.innerHTML = `<p class="task-err">${e.message}</p>`;
+    }
+  }
+
+  $('btnQueueRefresh').addEventListener('click', loadQueue);
+  $('btnQueueClear').addEventListener('click', async () => {
+    if (!confirm('清空所有排队的任务?')) return;
+    try { await api('/api/queue/clear', { method: 'POST' }); loadQueue(); }
+    catch (e) { alert(e.message); }
+  });
+  $('btnInterrupt').addEventListener('click', async () => {
+    try { await api('/api/queue/interrupt', { method: 'POST' }); loadQueue(); }
+    catch (e) { alert('中断失败: ' + e.message); }
+  });
+
+  loadWs();
+})();
+</script>
+{% endblock %}
