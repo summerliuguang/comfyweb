@@ -49,12 +49,28 @@ details.adv[open]>summary::before{transform:rotate(90deg)}
 .gfilter .input{max-width:11rem}
 .gfilter .select{max-width:11rem}
 .gfilter select.select{max-width:11rem;padding:.35rem .4rem;border:1px solid var(--line);border-radius:var(--radius-s);background:var(--card);color:var(--text)}
+/* 手机端筛选:两列网格,关键字占整行,避免控件各自一行又宽度不齐 */
+@media(max-width:899px){
+  .gfilter{display:grid;grid-template-columns:1fr 1fr;align-items:stretch}
+  .gfilter .input{grid-column:1/-1;max-width:none;width:100%}
+  .gfilter select.select{max-width:none;width:100%;min-height:40px}
+  .gfilter .button{min-height:40px}
+}
 /* 瀑布流图片墙:JS 按最短列摆放,保持从左往右的阅读顺序 */
 .masonry{position:relative}
 .masonry .gitem{position:absolute;top:0;left:0;margin:0;display:block;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--card);transition:border-color .18s ease}
 .masonry .gitem:hover{border-color:#c9cfdd}
 .masonry .gitem img{width:100%;height:auto;display:block}
 .masonry .gitem .gmeta{padding:.35rem .5rem;font-size:.7rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-top:1px solid var(--line)}
+
+/* Civitai 搜索结果网格:方形封面卡片 */
+.civ-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:.6rem}
+@media(min-width:640px){.civ-grid{grid-template-columns:repeat(3,1fr)}}
+@media(min-width:900px){.civ-grid{grid-template-columns:repeat(4,1fr)}}
+.civ-grid .gitem{display:block;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--card);transition:border-color .18s ease}
+.civ-grid .gitem:hover{border-color:#c9cfdd}
+.civ-grid .gitem img{width:100%;aspect-ratio:1;object-fit:cover;display:block;background:var(--bg)}
+.civ-grid .gitem .gmeta{padding:.4rem .55rem;font-size:.72rem;color:var(--muted);border-top:1px solid var(--line)}
 
 /* 画廊详情:全屏沉浸式查看器(默认黑底,可切浅色) */
 .viewer{position:fixed;inset:0;z-index:60;background:#0b0d13;touch-action:none;overflow:hidden}
