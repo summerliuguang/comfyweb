@@ -434,7 +434,7 @@ def civitai_image_proxy():
         r = civitai.fetch_image(u)
     except civitai.CivitaiError as e:
         return err(e, 502)
-    body = r.read()
+    body = r.content
     r.close()
     ctype = r.headers.get("Content-Type", "image/jpeg")
     img_cache_store(ck, body, ctype)

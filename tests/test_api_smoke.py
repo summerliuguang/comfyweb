@@ -107,6 +107,40 @@ class ApiSmoke(unittest.TestCase):
         r = self.c.post("/api/settings", json={}, headers={"Origin": "http://localhost"})
         self.assertEqual(r.status_code, 200)
 
+    def test_civitai_image_proxy(self):
+        """/civimg 走 fetch_image 的 requests 响应(.content),二次请求命中磁盘缓存。"""
+        import app as app_mod
+        from urllib.parse import quote
+
+        class FakeResp:
+            content = b"fake-jpeg-bytes"
+            headers = {"Content-Type": "image/jpeg"}
+
+            def close(self):
+                pass
+
+        calls = []
+        orig = app_mod.civitai.fetch_image
+
+        def fake_fetch(url):
+            calls.append(url)
+            return FakeResp()
+
+        app_mod.civitai.fetch_image = fake_fetch
+        try:
+            u = quote("https://image.civitai.com/x/1.jpeg", safe="")
+            r = self.c.get(f"/civimg?u={u}")
+            self.assertEqual(r.status_code, 200)
+            self.assertEqual(r.data, b"fake-jpeg-bytes")
+            # 同 URL 二次请求应命中缓存,不再回调 fetch_image
+            app_mod.civitai.fetch_image = lambda url: (_ for _ in ()).throw(
+                AssertionError("第二次请求不应回源"))
+            r = self.c.get(f"/civimg?u={u}")
+            self.assertEqual(r.status_code, 200)
+            self.assertEqual(r.data, b"fake-jpeg-bytes")
+        finally:
+            app_mod.civitai.fetch_image = orig
+
 
 if __name__ == "__main__":
     unittest.main()

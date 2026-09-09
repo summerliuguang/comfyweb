@@ -10,12 +10,11 @@
 
   const draftKey = wid => 'comfyweb.draft.' + wid;
 
-  async function jsonFetch(path, opts) {
-    // 只允许本站 /api/ 路径,与后端 same_origin_only 呼应
-    if (typeof path !== 'string' || !path.startsWith('/api/')) {
-      throw new Error('jsonFetch 仅接受同源 /api/ 路径');
-    }
-    const r = await fetch(path, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts));
+  // fetch 一律用字面量路径 + parseInt 过的数值 id(路径段强制数值);
+  // 响应处理统一走 toJson,不再有"URL 参数进 fetch"的封装
+  const numId = v => parseInt(v, 10);
+
+  async function toJson(r) {
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(data.error || r.status);
     return data;
@@ -44,12 +43,13 @@
     }
   }
 
-  async function loadTemplate(wid) {
+  async function loadTemplate() {
     formArea.innerHTML = '';
     submitRow.hidden = true;
+    const wid = wfSelect.value;
     if (!wid) return;
     try {
-      tpl = await jsonFetch('/api/workflows/' + wid);
+      tpl = await toJson(await fetch('/api/workflows/' + numId(wid)));
       renderForm(formArea, tpl);
       const draft = localStorage.getItem(draftKey(tpl.id));
       if (draft) {
@@ -78,7 +78,7 @@
     if (!pos) return;
     let d;
     try {
-      d = await jsonFetch('/api/prompts?workflow_id=' + tpl.id);
+      d = await toJson(await fetch('/api/prompts?workflow_id=' + numId(tpl.id)));
     } catch (e) { return; }
     if (!d.prompts || !d.prompts.length) return;
     const el = [...formArea.querySelectorAll('[data-pname]')]
@@ -105,7 +105,7 @@
     el.closest('.field').after(box);
   }
 
-  wfSelect.addEventListener('change', () => loadTemplate(wfSelect.value));
+  wfSelect.addEventListener('change', () => loadTemplate());
   formArea.addEventListener('input', () => saveDraft());
   formArea.addEventListener('change', () => saveDraft());
 
@@ -119,15 +119,16 @@
     }
     btn.classList.add('is-loading');
     try {
-      const res = await jsonFetch('/api/generate', {
+      const res = await toJson(await fetch('/api/generate', {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           workflow_id: parseInt(wfSelect.value, 10),
           values,
           count: Math.max(1, parseInt($('countInput').value, 10) || 1),
           random_seed: $('seedRandom') ? $('seedRandom').checked : true,
         }),
-      });
+      }));
       for (const id of res.task_ids) pollIds.add(id);
       if (res.error) { errBox.textContent = res.error; errBox.hidden = false; }
       saveDraft();
@@ -148,11 +149,13 @@
 
   /* ---------- 再次生成:把任务参数回填到表单 ---------- */
 
-  async function refillFromTask(taskId) {
-    if (!tpl) return;
+  let refillTaskId = null;  // 待回填的任务 id(赋值处已 numId 强转)
+
+  async function refillFromTask() {
+    if (!tpl || refillTaskId == null) return;
     let t;
     try {
-      t = (await jsonFetch('/api/tasks/' + taskId)).task;
+      t = (await toJson(await fetch('/api/tasks/' + numId(refillTaskId)))).task;
     } catch (e) { alert(e.message); return; }
     const byLabel = {};
     for (const p of t.params || []) byLabel[p.label] = p.value;
@@ -253,7 +256,7 @@
       b.textContent = '取消';
       b.addEventListener('click', async () => {
         b.classList.add('is-loading');
-        try { await jsonFetch(`/api/tasks/${t.id}/cancel`, { method: 'POST' }); refreshTasks(); }
+        try { await toJson(await fetch(`/api/tasks/${numId(t.id)}/cancel`, { method: 'POST' })); refreshTasks(); }
         catch (e) { b.classList.remove('is-loading'); alert(e.message); }
       });
       row.appendChild(b);
@@ -261,7 +264,7 @@
       const b = document.createElement('button');
       b.className = 'button is-small is-link is-light';
       b.textContent = '再来一次';
-      b.addEventListener('click', () => refillFromTask(t.id));
+      b.addEventListener('click', () => { refillTaskId = numId(t.id); refillFromTask(); });
       row.appendChild(b);
       const a = document.createElement('a');
       a.className = 'button is-small';
@@ -276,13 +279,13 @@
   async function refreshTasks() {
     let ids = [...pollIds];
     if (!ids.length) {
-      const recent = await jsonFetch('/api/tasks/recent?limit=8').catch(() => null);
+      const recent = await toJson(await fetch('/api/tasks/recent?limit=8')).catch(() => null);
       if (!recent) return;
       renderCards(recent.tasks);
       pollIds = new Set(recent.tasks.filter(t => t.status === 'queued' || t.status === 'running').map(t => t.id));
       return;
     }
-    const res = await jsonFetch('/api/tasks?ids=' + ids.join(',')).catch(() => null);
+    const res = await toJson(await fetch('/api/tasks?ids=' + ids.map(numId).join(','))).catch(() => null);
     if (!res) return;
     renderCards(res.tasks);
     pollIds = new Set(res.tasks.filter(t => t.status === 'queued' || t.status === 'running').map(t => t.id));
@@ -330,12 +333,15 @@
   const want = q.get('template') || last;
   if (want && [...wfSelect.options].some(o => o.value === want)) {
     wfSelect.value = want;
-    loadTemplate(want).then(async () => {
-      const tid = q.get('task');
+    loadTemplate().then(async () => {
+      const tid = numId(q.get('task'));
       if (tid) {
         try {
-          const t = (await jsonFetch('/api/tasks/' + tid)).task;
-          if (t.workflow_id === parseInt(want, 10)) await refillFromTask(tid);
+          const t = (await toJson(await fetch('/api/tasks/' + tid))).task;
+          if (t.workflow_id === numId(want)) {
+            refillTaskId = tid;
+            await refillFromTask();
+          }
         } catch (e) { /* 忽略 */ }
         history.replaceState(null, '', '/');
       }
