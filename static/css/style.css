@@ -49,12 +49,11 @@ details.adv[open]>summary::before{transform:rotate(90deg)}
 .gfilter .input{max-width:11rem}
 .gfilter .select{max-width:11rem}
 .gfilter select.select{max-width:11rem;padding:.35rem .4rem;border:1px solid var(--line);border-radius:var(--radius-s);background:var(--card);color:var(--text)}
-.masonry{column-count:2;column-gap:.6rem}
-@media(min-width:640px){.masonry{column-count:3}}
-@media(min-width:900px){.masonry{column-count:4}}
-.masonry .gitem{break-inside:avoid;margin:0 0 .6rem;display:block;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--card);transition:border-color .18s ease}
+/* 瀑布流图片墙:JS 按最短列摆放,保持从左往右的阅读顺序 */
+.masonry{position:relative}
+.masonry .gitem{position:absolute;top:0;left:0;margin:0;display:block;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--card);transition:border-color .18s ease}
 .masonry .gitem:hover{border-color:#c9cfdd}
-.masonry .gitem img{width:100%;height:auto;aspect-ratio:auto;display:block}
+.masonry .gitem img{width:100%;height:auto;display:block}
 .masonry .gitem .gmeta{padding:.35rem .5rem;font-size:.7rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-top:1px solid var(--line)}
 
 /* 画廊详情:全屏沉浸式查看器(默认黑底,可切浅色) */
@@ -66,7 +65,18 @@ details.adv[open]>summary::before{transform:rotate(90deg)}
 .viewer.light .vchip{background:rgba(20,24,34,.1);color:#333}
 .v-count{background:none;pointer-events:none}
 .viewer .v-stage{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
-.viewer .v-stage img{max-width:100vw;max-height:100vh;max-height:100dvh;width:auto;height:auto;object-fit:contain;display:block;cursor:zoom-in}
+.viewer .v-stage img{max-width:100vw;max-height:100vh;max-height:100dvh;width:auto;height:auto;object-fit:contain;display:block;touch-action:none}
+.viewer .v-stage img.snapping{transition:transform .22s ease}
+.viewer .v-stage img.anim-next{animation:vSlideNext .2s ease}
+.viewer .v-stage img.anim-prev{animation:vSlidePrev .2s ease}
+@keyframes vSlideNext{from{opacity:0;transform:translateY(20px) scale(.985)}to{opacity:1;transform:none}}
+@keyframes vSlidePrev{from{opacity:0;transform:translateY(-20px) scale(.985)}to{opacity:1;transform:none}}
+@media(prefers-reduced-motion:reduce){.viewer .v-stage img{animation:none!important;transition:none!important}}
+.v-toast{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);z-index:7;
+  background:rgba(255,255,255,.16);color:#eef1f8;padding:.45rem 1rem;border-radius:999px;
+  font-size:.8rem;opacity:0;transition:opacity .2s ease;pointer-events:none;backdrop-filter:blur(6px)}
+.v-toast.show{opacity:1}
+.viewer.light .v-toast{background:rgba(20,24,34,.55);color:#fff}
 .viewer .dnav{position:absolute;top:50%;transform:translateY(-50%);border:none;background:rgba(255,255,255,.14);color:#e8ebf3;width:2.4rem;height:2.4rem;border-radius:50%;font-size:1.2rem;line-height:1;cursor:pointer}
 .viewer.light .dnav{background:rgba(20,24,34,.1);color:#333}
 .viewer .dnav.prev{left:.5rem}
