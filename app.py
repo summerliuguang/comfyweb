@@ -627,7 +627,7 @@ def api_remote_workflows():
         if r["name"] and cand in names_set:
             db.execute("UPDATE workflows SET source=? WHERE id=?", (cand, r["id"]))
     imported = db.query(
-        "SELECT id, name, source FROM workflows WHERE source!='' ORDER BY id")
+        "SELECT id, name, source, created_at FROM workflows WHERE source!='' ORDER BY id")
     return {"workflows": names, "imported": [dict(r) for r in imported]}
 
 
@@ -686,10 +686,7 @@ def api_workflow_import_remote_save():
     except ComfyError as e:
         return err(e, 502)
     display = name[:-len(".json")] or "未命名"
-    base, n = display, 2
-    while db.query_one("SELECT 1 FROM workflows WHERE name=?", (display,)):
-        display = f"{base} ({n})"
-        n += 1
+    display = unique_workflow_name(display)
     cur = db.execute("INSERT INTO workflows(name) VALUES(?)", (display,))
     wid = cur.lastrowid
     db.execute("UPDATE workflows SET filename=?, source=? WHERE id=?",
@@ -704,6 +701,7 @@ def api_workflow_create():
     data = request.get_json(silent=True) or {}
     name = (data.get("name") or "").strip() or \
         datetime.now().strftime("工作流 %Y-%m-%d %H:%M")
+    name = unique_workflow_name(name)
     wf = data.get("workflow")
     params = sanitize_params(data.get("params"))
     if not isinstance(wf, dict) or not wf:
@@ -789,6 +787,15 @@ def params_display(tpl, values, seed):
     if seed is not None:
         items.append({"label": "随机种子", "value": seed})
     return items
+
+
+def unique_workflow_name(base):
+    """同名模板自动加 "(2)"/"(3)" 后缀。"""
+    display, n = base, 2
+    while db.query_one("SELECT 1 FROM workflows WHERE name=?", (display,)):
+        display = f"{base} ({n})"
+        n += 1
+    return display
 
 
 def extract_model_lora(tpl, values):

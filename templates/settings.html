@@ -29,6 +29,19 @@
 </div>
 
 <div class="panel">
+  <h2 class="title is-5">外观</h2>
+  <div class="field">
+    <label class="label">主题模式</label>
+    <div class="buttons" id="themeBtns">
+      <button class="button is-small" data-theme-opt="system">跟随系统</button>
+      <button class="button is-small" data-theme-opt="light">日间模式</button>
+      <button class="button is-small" data-theme-opt="dark">夜间模式</button>
+    </div>
+    <p class="hint">选择立即生效并保存在本设备;「跟随系统」随系统的深色偏好自动切换。</p>
+  </div>
+</div>
+
+<div class="panel">
   <h2 class="title is-5">Civitai（模型 / LoRA 信息源）</h2>
   <div class="field">
     <label class="label">代理地址（可选）</label>
@@ -73,6 +86,24 @@
 <script>
 (function () {
   const $ = id => document.getElementById(id);
+
+  /* 主题模式:跟随系统/日间/夜间(存本设备) */
+  const themeBtns = document.getElementById('themeBtns');
+  function markTheme() {
+    const cur = localStorage.getItem('comfyweb.theme') || 'system';
+    for (const b of themeBtns.querySelectorAll('button')) {
+      b.classList.toggle('is-link', b.dataset.themeOpt === cur);
+      b.classList.toggle('is-light', b.dataset.themeOpt !== cur);
+    }
+  }
+  themeBtns.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-theme-opt]');
+    if (!b) return;
+    localStorage.setItem('comfyweb.theme', b.dataset.themeOpt);
+    (window.comfyTheme || function () {})(b.dataset.themeOpt);
+    markTheme();
+  });
+  markTheme();
 
   async function api(url, opts) {
     const r = await fetch(url, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts));
