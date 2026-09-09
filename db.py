@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS workflows(
   name TEXT NOT NULL,
   filename TEXT NOT NULL DEFAULT '',
   template_json TEXT,
+  source TEXT NOT NULL DEFAULT '',
   enabled INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
@@ -33,6 +34,8 @@ CREATE TABLE IF NOT EXISTS tasks(
   workflow_name TEXT NOT NULL DEFAULT '',
   prompt_text TEXT NOT NULL DEFAULT '',
   seed INTEGER,
+  model TEXT NOT NULL DEFAULT '',
+  lora TEXT NOT NULL DEFAULT '',
   params_json TEXT NOT NULL DEFAULT '[]',
   status TEXT NOT NULL DEFAULT 'queued',
   progress REAL NOT NULL DEFAULT 0,
@@ -65,6 +68,32 @@ CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at);
 """
 
 
+def _backfill_task_models(db):
+    """历史任务回填 model/lora(从 params_json 里按标签提取),只处理一次。"""
+    rows = db.execute(
+        "SELECT id, params_json FROM tasks WHERE model='' AND lora='' "
+        "AND params_json!='[]'").fetchall()
+    for r in rows:
+        try:
+            items = json.loads(r["params_json"] or "[]")
+        except ValueError:
+            continue
+        model, lora = "", ""
+        for it in items if isinstance(items, list) else []:
+            lab = str(it.get("label", ""))
+            val = str(it.get("value", ""))
+            if not val or val == "None" or ".safetensors" not in val and ".ckpt" not in val:
+                continue
+            low = lab.lower()
+            if "lora" in low:
+                lora = f"{lora}, {val}" if lora else val
+            elif not model and ("模型" in lab or "checkpoint" in low):
+                model = val
+        if model or lora:
+            db.execute("UPDATE tasks SET model=?, lora=? WHERE id=?",
+                       (model[:200], lora[:300], r["id"]))
+
+
 def init_db():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     WF_DIR.mkdir(parents=True, exist_ok=True)
@@ -84,6 +113,16 @@ def init_db():
             "INSERT INTO workflows(id, name, filename, template_json, enabled, created_at) "
             "SELECT id, name, filename, template_json, enabled, created_at FROM workflows_old")
         db.execute("DROP TABLE workflows_old")
+    # 增量列:模板导入来源 / 画廊筛选用的主模型与 LoRA
+    cols = {r[1] for r in db.execute("PRAGMA table_info(workflows)")}
+    if "source" not in cols:
+        db.execute("ALTER TABLE workflows ADD COLUMN source TEXT NOT NULL DEFAULT ''")
+    tcols = {r[1] for r in db.execute("PRAGMA table_info(tasks)")}
+    if "model" not in tcols:
+        db.execute("ALTER TABLE tasks ADD COLUMN model TEXT NOT NULL DEFAULT ''")
+    if "lora" not in tcols:
+        db.execute("ALTER TABLE tasks ADD COLUMN lora TEXT NOT NULL DEFAULT ''")
+    _backfill_task_models(db)
     # filename 仅为迁移保留,统一按行 id 命名
     db.execute("UPDATE workflows SET filename='wf_'||id||'.json' WHERE filename=''")
     # 同一任务的同名图片只留一条(WS 落库与轮询对账可能并发写入),再建唯一索引兜底

@@ -154,11 +154,13 @@
           name: $('wfName').value,
           workflow: JSON.parse($('wfText').value),
           params,
-          batch_node: parsed.batch_node
+          batch_node: parsed.batch_node,
+          source: sessionStorage.getItem('import_remote_src') || ''
         })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || res.status);
+      sessionStorage.removeItem('import_remote_src');
       location.href = '/workflows';
     } catch (e) {
       if (e instanceof SyntaxError) {
@@ -176,6 +178,7 @@
   const handoff = sessionStorage.getItem('import_remote');
   if (handoff) {
     sessionStorage.removeItem('import_remote');
+    sessionStorage.setItem('import_remote_src', handoff);
     loadRemote().then(() => {
       const sel = $('remoteSelect');
       const opt = [...sel.options].find(o => o.value === encodeURIComponent(handoff) || o.value === handoff);
