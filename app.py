@@ -597,6 +597,7 @@ def api_save_settings():
         db.set_setting("civitai_token", "")
     if "civitai_nsfw" in data:
         db.set_setting("civitai_nsfw", "1" if data.get("civitai_nsfw") else "0")
+    civitai.reset_session()  # 代理/Token 可能已变更,丢弃旧连接
     if "record_keep" in data:
         try:
             keep = max(20, min(5000, int(data.get("record_keep") or 200)))
@@ -937,7 +938,10 @@ def serialize_task(t, images):
 
 
 def reconcile_active_tasks(rows):
-    """WS 掉线兜底:排队/执行超过 10 秒的任务直接查 history 对账。"""
+    """WS 掉线兜底:仅在 WS 断开或事件流停滞超过 10 秒时用 history 对账,
+    WS 健康时每次轮询都查 history 会白白打 ComfyUI。"""
+    if client.ws_state == "已连接" and time.time() - client.last_event_ts < 10:
+        return
     now = datetime.now()
     for t in rows:
         if t["status"] not in ("queued", "running") or not t["prompt_id"]:
