@@ -8,6 +8,21 @@
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
 <link rel="manifest" href="/static/manifest.webmanifest">
 <title>{% block title %}ComfyWeb{% endblock %}</title>
+<script>
+/* 主题模式:跟随系统/日间/夜间(localStorage),在样式表加载前应用避免闪白 */
+(function () {
+  function apply(t) {
+    var dark = t === 'dark' ||
+      (t === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    var root = document.documentElement;
+    if (dark) root.setAttribute('data-theme', 'dark');
+    else root.removeAttribute('data-theme');
+    root.style.colorScheme = dark ? 'dark' : 'light';
+  }
+  window.comfyTheme = apply;
+  try { apply(localStorage.getItem('comfyweb.theme') || 'system'); } catch (e) {}
+})();
+</script>
 <link rel="stylesheet" href="/static/vendor/bulma.min.css">
 <link rel="stylesheet" href="/static/css/skin.css">
 <link rel="stylesheet" href="/static/css/style.css">

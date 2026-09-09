@@ -16,14 +16,16 @@
 
   <div class="dhint" id="dhint">上下滑动 / 滚轮 / ↑↓ 键切换 · 点击图片放大 · ◐ 切换背景</div>
 
-  <button class="brief-bar" id="briefBar" type="button">
-    <span class="b-prompt">{{ item.prompt_text or '(无提示词)' }}</span>
-    <span class="b-meta">{{ item.workflow_name }}{% if item.model_short %} · {{ item.model_short }}{% endif %} · {{ item.task_created }}</span>
-    <span class="chev" id="briefChev">详情 ▾</span>
-  </button>
-
-  <div class="info-panel" id="infoPanel" hidden>
-    <table class="kv">
+  <div class="sheet" id="sheet">
+    <div class="sheet-head" id="sheetHead">
+      <div class="s-prompt">{{ item.prompt_text or '(无提示词)' }}</div>
+      <div class="s-row2">
+        <span class="s-meta">{{ item.workflow_name }}{% if item.model_short %} · {{ item.model_short }}{% endif %} · {{ item.task_created }}</span>
+        <span class="chev" id="briefChev">详情 ▾</span>
+      </div>
+    </div>
+    <div class="sheet-body" id="sheetBody" hidden>
+      <table class="kv">
       <tr><td>工作流</td><td>{{ item.workflow_name }}</td></tr>
       {% if item.model %}
       <tr><td>模型</td><td class="val">{{ item.model }}</td></tr>
@@ -51,6 +53,7 @@
       {% endif %}
       <button class="button is-danger is-light is-small" id="btnDelete">删除记录</button>
     </div>
+  </div>
   </div>
 </div>
 {% endblock %}
@@ -104,7 +107,7 @@
   stage.addEventListener('touchend', onTouchEnd, { passive: true });
   stage.addEventListener('touchcancel', onTouchEnd, { passive: true });
 
-  /* 点图片 → 灯箱放大(滑动后的幽灵点击要忽略) */
+  /* 点图片:sheet 展开时先收起,否则进灯箱放大(滑动后的幽灵点击要忽略) */
   let lastSwipe = 0;
   stage.addEventListener('touchend', () => {
     if (swiping) return;
@@ -112,16 +115,21 @@
   }, { passive: true });
   document.getElementById('detailImg').addEventListener('click', () => {
     if (Date.now() - lastSwipe < 500) return;
+    const sheet = document.getElementById('sheet');
+    if (sheet.classList.contains('open')) { setSheet(false); return; }
     Lightbox.open([{ url: document.getElementById('detailImg').src,
                      caption: {{ item.prompt_text | tojson }} }], 0);
   });
 
-  /* 简要信息栏 → 展开/收起详细(底部抽屉) */
-  const bar = document.getElementById('briefBar'), panel = document.getElementById('infoPanel');
-  bar.addEventListener('click', () => {
-    panel.hidden = !panel.hidden;
-    document.getElementById('briefChev').textContent = panel.hidden ? '详情 ▾' : '收起 ▴';
-  });
+  /* 底部 sheet:收起=两行摘要(顶部圆角),展开=完整参数抽屉,点头部开合 */
+  const sheet = document.getElementById('sheet');
+  function setSheet(open) {
+    sheet.classList.toggle('open', open);
+    document.getElementById('sheetBody').hidden = !open;
+    document.getElementById('briefChev').textContent = open ? '收起 ▴' : '详情 ▾';
+  }
+  document.getElementById('sheetHead').addEventListener('click', () =>
+    setSheet(!sheet.classList.contains('open')));
 
   document.getElementById('btnDelete').addEventListener('click', async (e) => {
     e.stopPropagation();

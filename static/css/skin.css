@@ -55,4 +55,30 @@ textarea:focus-visible,summary:focus-visible,[tabindex]:focus-visible{
   box-shadow:0 0 0 3px var(--primary-weak)}
 *{-webkit-tap-highlight-color:transparent}
 
+/* 夜间模式:覆盖变量 + 少量 Bulma 固定色 */
+:root[data-theme="dark"]{--bg:#12141c;--card:#1a1d28;--line:#2a2e3c;--primary-weak:#1d2740;
+  --text:#e2e5ee;--muted:#8f96ab;color-scheme:dark}
+:root[data-theme="dark"] .card.hoverable:hover,
+:root[data-theme="dark"] .button:hover,
+:root[data-theme="dark"] .input:hover,
+:root[data-theme="dark"] .select select:hover,
+:root[data-theme="dark"] .textarea:hover{border-color:#3a4054}
+:root[data-theme="dark"] .tag.is-light{background:#242836;color:#c6cbd9}
+:root[data-theme="dark"] .notification.is-link.is-light{background:#1d2740;color:#9db9f5}
+:root[data-theme="dark"] .title,:root[data-theme="dark"] .label{color:var(--text)}
+:root[data-theme="dark"] .button{background-color:var(--card);color:var(--text);border-color:var(--line)}
+:root[data-theme="dark"] .button.is-link,
+:root[data-theme="dark"] .button.is-primary{background-color:var(--primary);color:#fff;border-color:transparent}
+:root[data-theme="dark"] .button.is-link.is-light{background-color:var(--primary-weak);color:#9db9f5}
+:root[data-theme="dark"] .button.is-danger.is-light{background:#3d1f24;color:#f08a8a}
+:root[data-theme="dark"] .input,
+:root[data-theme="dark"] .select select,
+:root[data-theme="dark"] .textarea{background-color:var(--card);border-color:var(--line);color:var(--text)}
+:root[data-theme="dark"] .input::placeholder,
+:root[data-theme="dark"] .textarea::placeholder{color:#6b7288}
+:root[data-theme="dark"] .select:not(.is-multiple)::after{border-color:#8f96ab}
+:root[data-theme="dark"] .table{background-color:var(--card);color:var(--text)}
+:root[data-theme="dark"] .panel-block,
+:root[data-theme="dark"] .checkbox{color:var(--text)}
+
 @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}

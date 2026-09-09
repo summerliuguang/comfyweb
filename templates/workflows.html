@@ -117,16 +117,8 @@
           const del = document.createElement('button');
           del.className = 'button is-small is-danger is-light';
           del.textContent = '删除导入';
-          const latest = copies[copies.length - 1];
-          del.title = '删除已导入的模板:' + copies.map(c => c.name).join('、');
-          del.addEventListener('click', async () => {
-            const more = copies.length > 1 ? `(共 ${copies.length} 份,将删除最新的一份)` : '';
-            if (!confirm(`删除已导入的模板「${latest.name}」?${more}\n生成记录与图片不受影响。`)) return;
-            del.classList.add('is-loading');
-            const r = await fetch(`/api/workflows/${latest.id}/delete`, { method: 'POST' });
-            if (r.ok) location.reload();
-            else { del.classList.remove('is-loading'); const d2 = await r.json().catch(() => ({})); alert(d2.error || r.status); }
-          });
+          del.title = '选择删除已导入的副本';
+          del.addEventListener('click', () => showCopyChooser(n, copies));
           btns.appendChild(del);
         }
         row.appendChild(btns);
@@ -135,6 +127,49 @@
     } catch (e) {
       box.innerHTML = `<p class="task-err">读取失败: ${e.message}(检查设置页的 ComfyUI 地址)</p>`;
     }
+  }
+
+  /* 副本选择弹层:逐份删除 */
+  function showCopyChooser(sourceName, copies) {
+    document.getElementById('copyChooser')?.remove();
+    const ov = document.createElement('div');
+    ov.id = 'copyChooser';
+    ov.style.cssText = 'position:fixed;inset:0;z-index:60;background:rgba(10,12,18,.5);display:flex;align-items:center;justify-content:center;padding:1rem';
+    const card = document.createElement('div');
+    card.style.cssText = 'background:var(--card);border:1px solid var(--line);border-radius:14px;max-width:26rem;width:100%;max-height:80vh;overflow:auto;padding:1rem 1.1rem';
+    const title = document.createElement('p');
+    title.style.cssText = 'font-weight:600;margin-bottom:.6rem';
+    title.textContent = `「${sourceName.replace(/\.json$/, '')}」的导入副本`;
+    card.appendChild(title);
+    for (const c of copies) {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:.6rem;padding:.45rem 0;border-bottom:1px solid var(--line)';
+      const info = document.createElement('span');
+      info.style.cssText = 'font-size:.84rem;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+      info.textContent = `${c.name} · ${c.created_at || ''}`;
+      info.title = c.name;
+      const b = document.createElement('button');
+      b.className = 'button is-small is-danger is-light';
+      b.textContent = '删除';
+      b.addEventListener('click', async () => {
+        if (!confirm(`删除模板「${c.name}」?生成记录与图片不受影响。`)) return;
+        b.classList.add('is-loading');
+        const r = await fetch(`/api/workflows/${c.id}/delete`, { method: 'POST' });
+        if (r.ok) location.reload();
+        else { b.classList.remove('is-loading'); const d2 = await r.json().catch(() => ({})); alert(d2.error || r.status); }
+      });
+      row.append(info, b);
+      card.appendChild(row);
+    }
+    const close = document.createElement('button');
+    close.className = 'button is-small';
+    close.textContent = '关闭';
+    close.style.marginTop = '.7rem';
+    close.addEventListener('click', () => ov.remove());
+    card.appendChild(close);
+    ov.appendChild(card);
+    ov.addEventListener('click', (e) => { if (e.target === ov) ov.remove(); });
+    document.body.appendChild(ov);
   }
   load();
 
