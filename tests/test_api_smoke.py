@@ -1,13 +1,21 @@
-"""API 冒烟测试:进程内启动 mock ComfyUI,走 app 完整请求链。"""
+"""API 冒烟测试:进程内启动 mock ComfyUI,走 app 完整请求链。
+
+使用独立临时数据目录(COMFYWEB_DATA_DIR),绝不读写生产 data/comfyweb.db。
+"""
+import os
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import db
-from tests import mock_comfy
+# 必须在导入 app/db 之前设置,隔离测试数据
+os.environ["COMFYWEB_DATA_DIR"] = tempfile.mkdtemp(prefix="comfyweb-test-")
+
+import db  # noqa: E402
+from tests import mock_comfy  # noqa: E402
 
 # 简单 txt2img API 工作流
 API_WF = {
@@ -29,13 +37,15 @@ def setUpModule():
     time.sleep(1.2)
     db.init_db()
     db.set_setting("comfy_url", "http://127.0.0.1:5099")
+    import app  # 延迟导入:确保上面已切换测试数据目录
+    app.app.config["TESTING"] = True
+    global client_app
+    client_app = app.app.test_client()
 
 
 class ApiSmoke(unittest.TestCase):
     def setUp(self):
-        import app
-        app.app.config["TESTING"] = True
-        self.c = app.app.test_client()
+        self.c = client_app
         # 同源钩子:测试请求默认无 Origin 头,不会被拦
 
     def test_full_generation_flow(self):
@@ -71,6 +81,18 @@ class ApiSmoke(unittest.TestCase):
                 break
         self.assertEqual(task["status"], "done")
         self.assertEqual(len(task["images"]), 2)
+        # 图片代理:原图、缩略图(走缓存)、下载头三种形态
+        img_url = task["images"][0]["url"]
+        r = self.c.get(img_url)
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.data.startswith(b"\x89PNG"))
+        r = self.c.get(task["images"][0]["thumb"])
+        self.assertEqual(r.status_code, 200)
+        r2 = self.c.get(task["images"][0]["thumb"])
+        self.assertEqual(r2.status_code, 200)  # 第二次命中磁盘缓存
+        r = self.c.get(img_url + "&dl=1")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("attachment", r.headers.get("Content-Disposition", ""))
         # 画廊出现该任务图片
         gal = self.c.get("/gallery")
         self.assertEqual(gal.status_code, 200)

@@ -14,40 +14,104 @@
   }
 
   /* ---------- 本地已安装 ---------- */
+  let autoIdentifyDone = false, identifyPoll = null;
+
+  async function apiPost(path, body) {
+    const r = await fetch(path, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {})
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || r.status);
+    return d;
+  }
+
   async function loadLocal() {
     const box = $('localBox');
     try {
-      const d = await api('/api/local/models?type=' + window.LOCAL_DIR);
+      const d = await api('/api/local/models?type=' + window.LOCAL_DIR + '&meta=1');
       box.innerHTML = '';
-      if (!d.files.length) {
-        box.innerHTML = `<p class="empty">ComfyUI 侧还没有 ${window.LOCAL_LABEL}</p>`;
-        return;
-      }
+      const un = d.files.filter(f => !f.identified).length;
+      const head = document.createElement('div');
+      head.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:.5rem';
+      const txt = document.createElement('span');
+      txt.style.cssText = 'font-size:.85rem;font-weight:600';
+      txt.textContent = `${d.files.length} 个文件` + (un ? `,未识别 ${un}` : ',已全部识别');
+      head.appendChild(txt);
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'button is-small';
+      btn.textContent = un ? `识别(${un})` : '重新识别';
+      btn.addEventListener('click', async () => {
+        btn.classList.add('is-loading');
+        try {
+          await apiPost('/api/local/identify', { folder: window.LOCAL_DIR });
+          startIdentifyPoll();
+        } catch (e) { alert(e.message); }
+        btn.classList.remove('is-loading');
+      });
+      head.appendChild(btn);
+      box.appendChild(head);
+
       const wrap = document.createElement('details');
       const sum = document.createElement('summary');
-      sum.textContent = `${d.files.length} 个文件(点开查看)`;
-      sum.style.cssText = 'cursor:pointer;font-size:.85rem;font-weight:600';
+      sum.textContent = '点开查看';
+      sum.style.cssText = 'cursor:pointer;font-size:.85rem;font-weight:600;margin:.4rem 0';
       wrap.appendChild(sum);
-      const ul = document.createElement('div');
-      ul.style.cssText = 'display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.5rem';
+      const list = document.createElement('div');
       for (const f of d.files) {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:.6rem;padding:.3rem 0;border-bottom:1px solid var(--line);flex-wrap:wrap';
         const b = document.createElement('button');
         b.type = 'button';
         b.className = 'button is-small';
-        b.textContent = f.replace(/\.safetensors$|\.ckpt$|\.pt$/i, '');
-        b.title = '在 Civitai 搜索: ' + f;
+        b.textContent = f.filename.replace(/\.(safetensors|ckpt|pt|sft)$/i, '');
+        b.title = '在 Civitai 搜索: ' + f.filename;
+        b.style.maxWidth = '100%';
         b.addEventListener('click', () => {
-          $('q').value = f.replace(/\.(safetensors|ckpt|pt)$/i, '').replace(/[_-]+/g, ' ').trim();
+          $('q').value = f.filename.replace(/\.(safetensors|ckpt|pt)$/i, '').replace(/[_-]+/g, ' ').trim();
           doSearch(true);
           $('grid').scrollIntoView({ behavior: 'smooth' });
         });
-        ul.appendChild(b);
+        row.appendChild(b);
+        if (f.civ_name) {
+          const info = document.createElement('span');
+          info.className = 'task-meta';
+          info.textContent = `${f.civ_name}${f.base_model ? ' · ' + f.base_model : ''}`;
+          info.title = info.textContent;
+          row.appendChild(info);
+        } else if (!f.identified) {
+          const s = document.createElement('span');
+          s.className = 'task-meta';
+          s.textContent = '未识别';
+          row.appendChild(s);
+        }
+        list.appendChild(row);
       }
-      wrap.appendChild(ul);
+      wrap.appendChild(list);
       box.appendChild(wrap);
+
+      // 有未识别条目时自动开始一次识别,并轮询进度
+      if (un && !autoIdentifyDone) {
+        autoIdentifyDone = true;
+        apiPost('/api/local/identify', { folder: window.LOCAL_DIR })
+          .then(() => startIdentifyPoll()).catch(() => {});
+      }
     } catch (e) {
       box.innerHTML = `<p class="task-err">${e.message}</p>`;
     }
+  }
+
+  function startIdentifyPoll() {
+    if (identifyPoll) return;
+    let ticks = 0;
+    identifyPoll = setInterval(async () => {
+      ticks++;
+      await loadLocal();
+      const txt = $('localBox').textContent || '';
+      const un = Number((txt.match(/未识别 (\d+)/) || [])[1] || 0);
+      if (!un || ticks > 60) { clearInterval(identifyPoll); identifyPoll = null; }
+    }, 5000);
   }
 
   /* ---------- 搜索(全部走 cursor 分页) ---------- */

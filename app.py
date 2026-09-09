@@ -2,14 +2,14 @@
 import json
 import os
 import re
+import secrets
 import threading
 import time
 from datetime import datetime
 from urllib.parse import quote as urlquote, urlencode, urlsplit
 from uuid import uuid4
 
-from flask import (Flask, Response, jsonify, render_template, request,
-                   stream_with_context)
+from flask import (Flask, Response, jsonify, render_template, request)
 
 import db
 import civitai
@@ -67,32 +67,35 @@ def same_origin_only():
                 return err("拒绝跨源请求", 403)
 
 
-# ---------- 工作流模板文件 ----------
-
-TPL_FILE_RE = re.compile(r"^wf_[0-9]+\.json$")
-
-
-def tpl_path(filename):
-    """模板文件名只能是我们自己生成的形式,目录锁定在 data/workflows 内。"""
-    if not TPL_FILE_RE.match(str(filename)):
-        raise ValueError(f"非法模板文件名: {filename!r}")
-    p = (db.WF_DIR / filename).resolve()
-    if p.parent != db.WF_DIR.resolve():
-        raise ValueError("模板路径越界")
-    return p
-
+# ---------- 工作流模板(存数据库;旧的 JSON 文件在启动时迁移入库) ----------
 
 def load_tpl(row):
-    with open(tpl_path(row["filename"]), encoding="utf-8") as f:
-        return json.load(f)
+    tpl = db.get_workflow_template(row["id"])
+    if tpl is None:
+        raise ValueError(f"模板 {row['id']} 缺少内容")
+    return tpl
 
 
-def save_tpl_file(wid, data):
-    """模板文件名一律由行 id(整数)推导,写入路径固定在 data/workflows 内。"""
-    target = db.WF_DIR / ("wf_%d.json" % int(wid))
-    if target.resolve().parent != db.WF_DIR.resolve():
-        raise ValueError("模板路径越界")
-    target.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+def save_tpl(wid, data):
+    db.set_workflow_template(int(wid), data)
+
+
+def migrate_tpl_files():
+    """旧版模板存 JSON 文件,启动时迁移入数据库。"""
+    for row in db.query("SELECT id, filename, template_json FROM workflows"):
+        if row["template_json"]:
+            continue
+        data = None
+        try:
+            p = db.WF_DIR / row["filename"]
+            if p.exists():
+                data = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = None
+        if data:
+            db.set_workflow_template(row["id"], data)
+            db.execute("UPDATE workflows SET filename=? WHERE id=?",
+                       (f"wf_{row['id']}.json", row["id"]))
 
 
 def sanitize_params(params):
@@ -154,6 +157,44 @@ def complete_select_options(tpl):
             if not p.get("options"):
                 p["options"] = []
     return tpl
+
+
+def repair_template(tpl):
+    """修复旧模板:补全空数值参数的默认值(取自 object_info)。
+
+    Windows 版 ComfyUI 保存 UI JSON 时会把子目录路径写成双反斜杠、把未改动的
+    数值控件存成空串;前者在导入时归一,这里处理后者。返回是否有修复。
+    """
+    wf = tpl.get("workflow") or {}
+    classes = {}
+    for p in tpl.get("params") or []:
+        node = wf.get(p.get("node_id")) or {}
+        cls = node.get("class_type")
+        if not cls:
+            continue
+        empty_num = p.get("widget") in ("number", "float", "toggle") and p.get("value") in ("", None)
+        if empty_num or (p.get("widget") == "select" and not p.get("dynamic")):
+            classes[p["node_id"]] = cls
+    if not classes:
+        return False
+    oi = fetch_object_info(set(classes.values()))
+    fixed = False
+    for p in tpl.get("params") or []:
+        node = wf.get(p.get("node_id")) or {}
+        cls = node.get("class_type") or classes.get(p["node_id"])
+        if not cls:
+            continue
+        if p.get("widget") == "select" and not p.get("dynamic") and not p.get("options"):
+            p["options"] = wfmod.combo_options(oi, cls, p["input"]) or []
+        if p.get("widget") in ("number", "float", "toggle") and p.get("value") in ("", None):
+            default = wfmod.input_default(oi, cls, p["input"])
+            if default is not None:
+                p["value"] = default
+                node = wf.get(p["node_id"])
+                if node is not None and p["input"] in (node.get("inputs") or {}):
+                    node["inputs"][p["input"]] = default
+                fixed = True
+    return fixed
 
 
 # ---------- 页面 ----------
@@ -250,6 +291,8 @@ def page_loras():
 
 LOCAL_MODEL_DIRS = {"checkpoints": "checkpoints", "loras": "loras",
                     "diffusion_models": "diffusion_models", "vae": "vae"}
+FOLDER_CIV_TYPE = {"checkpoints": "Checkpoint", "diffusion_models": "Checkpoint",
+                   "loras": "LORA", "vae": "VAE"}
 
 CIVITAI_TYPES = {"Checkpoint", "LORA"}
 
@@ -280,7 +323,7 @@ def api_civitai_model(mid):
 
 @app.get("/api/local/models")
 def api_local_models():
-    """本机(ComfyUI 侧)已安装的模型文件列表。"""
+    """本机(ComfyUI 侧)已安装的模型文件列表,带 Civitai 匹配元数据。"""
     folder = request.args.get("type", "checkpoints")
     if folder not in LOCAL_MODEL_DIRS:
         return err("无效的类型")
@@ -288,19 +331,114 @@ def api_local_models():
         files = cached("models:" + folder, 120, lambda f=folder: client.models(f))
     except ComfyError as e:
         return err(e, 502)
-    return {"files": sorted(str(f) for f in files)}
+    metas = {r["filename"]: r for r in db.query("SELECT * FROM model_meta WHERE folder=?", (folder,))}
+    out = []
+    for f in sorted(str(f) for f in files):
+        m = metas.get(f)
+        out.append({
+            "filename": f,
+            "civ_id": m["civ_id"] if m else None,
+            "civ_name": m["civ_name"] if m else "",
+            "base_model": m["base_model"] if m else "",
+            "trained_words": json.loads(m["trained_words"]) if m and m["trained_words"] else [],
+            "cover": m["cover"] if m else "",
+            "identified": bool(m),
+        })
+    return {"files": out}
+
+
+_identify_lock = threading.Lock()
+_identify_threads = {}
+
+
+def identify_local_bg(folder, ctype):
+    """后台逐个匹配未识别的本地模型(每文件间隔 1 秒,防 Civitai 限流)。"""
+    try:
+        files = cached("models:" + folder, 120, lambda f=folder: client.models(f))
+        for f in sorted(str(x) for x in files):
+            if db.query_one("SELECT 1 FROM model_meta WHERE folder=? AND filename=?", (folder, f)):
+                continue
+            stem = re.sub(r"\.(safetensors|ckpt|pt|sft)$", "", f, flags=re.I)
+            try:
+                meta = civitai.match_by_filename(stem, ctype)
+            except civitai.CivitaiError:
+                return  # 网络/代理不可用,下次触发再试
+            db.execute(
+                "INSERT OR REPLACE INTO model_meta(folder, filename, civ_id, civ_name, "
+                "base_model, trained_words, cover) VALUES(?,?,?,?,?,?,?)",
+                (folder, f, meta["civ_id"] if meta else None,
+                 meta["civ_name"] if meta else "", meta["base_model"] if meta else "",
+                 json.dumps(meta["trained_words"], ensure_ascii=False) if meta else "[]",
+                 meta["cover"] if meta else ""))
+            time.sleep(1.0)
+    except Exception:
+        pass
+    finally:
+        with _identify_lock:
+            _identify_threads.pop(folder, None)
+
+
+@app.post("/api/local/identify")
+def api_local_identify():
+    """开始/继续后台识别指定目录的本地模型。"""
+    data = request.get_json(silent=True) or {}
+    folder = data.get("folder", "checkpoints")
+    if folder not in LOCAL_MODEL_DIRS:
+        return err("无效的类型")
+    with _identify_lock:
+        if folder in _identify_threads and _identify_threads[folder].is_alive():
+            return {"ok": True, "running": True}
+        t = threading.Thread(target=identify_local_bg,
+                             args=(folder, FOLDER_CIV_TYPE.get(folder, "Checkpoint")),
+                             daemon=True)
+        _identify_threads[folder] = t
+        t.start()
+    return {"ok": True, "running": True}
+
+
+@app.post("/api/local/identify/clear")
+def api_local_identify_clear():
+    data = request.get_json(silent=True) or {}
+    folder = data.get("folder", "loras")
+    if folder not in LOCAL_MODEL_DIRS:
+        return err("无效的类型")
+    db.execute("DELETE FROM model_meta WHERE folder=?", (folder,))
+    return {"ok": True}
+
+
+@app.get("/api/prompts")
+def api_prompt_history():
+    """某模板最近用过的正面提示词(去重,新→旧)。"""
+    try:
+        wid = int(request.args.get("workflow_id", 0) or 0)
+    except ValueError:
+        wid = 0
+    rows = db.query(
+        "SELECT prompt_text, MIN(id) AS mid FROM tasks "
+        "WHERE workflow_id=? AND prompt_text != '' GROUP BY prompt_text "
+        "ORDER BY mid DESC LIMIT 8", (wid,))
+    return {"prompts": [r["prompt_text"] for r in rows]}
 
 
 @app.get("/civimg")
 def civitai_image_proxy():
-    """civitai CDN 图片代理(局域网设备一般无法直连 civitai)。"""
+    """civitai CDN 图片代理(局域网设备一般无法直连 civitai),封面落盘缓存。"""
     u = request.args.get("u", "")
+    ck = "civ:" + u
+    cached_path, cached_ct = img_cache_get(ck)
+    if cached_path:
+        return Response(cached_path.read_bytes(),
+                        content_type=cached_ct or "image/jpeg",
+                        headers={"Cache-Control": "public, max-age=604800"})
     try:
         r = civitai.fetch_image(u)
     except civitai.CivitaiError as e:
         return err(e, 502)
-    return Response(stream_with_context(r.iter_content(16384)),
-                    content_type=r.headers.get("Content-Type", "image/jpeg"),
+    body = r.read()
+    r.close()
+    ctype = r.headers.get("Content-Type", "image/jpeg")
+    img_cache_store(ck, body, ctype)
+    return Response(body, content_type=ctype,
                     headers={"Cache-Control": "public, max-age=604800"})
 
 
@@ -470,9 +608,8 @@ def api_workflow_import_remote_save():
     display = name[:-len(".json")] or "未命名"
     cur = db.execute("INSERT INTO workflows(name, filename) VALUES(?, '')", (display,))
     wid = cur.lastrowid
-    save_tpl_file(wid, {"version": 1, "name": display, "workflow": tpl["workflow"],
-                        "params": tpl["params"], "batch_node": tpl["batch_node"]})
-    db.execute("UPDATE workflows SET filename=? WHERE id=?", (f"wf_{wid}.json", wid))
+    save_tpl(wid, {"version": 1, "name": display, "workflow": tpl["workflow"],
+                   "params": tpl["params"], "batch_node": tpl["batch_node"]})
     return {"ok": True, "id": wid, "name": display, "warnings": warnings}
 
 
@@ -489,10 +626,8 @@ def api_workflow_create():
         return err("没有可用的参数定义")
     cur = db.execute("INSERT INTO workflows(name, filename) VALUES(?, '')", (name,))
     wid = cur.lastrowid
-    filename = f"wf_{wid}.json"
-    save_tpl_file(wid, {"version": 1, "name": name, "workflow": wf,
-                        "params": params, "batch_node": data.get("batch_node")})
-    db.execute("UPDATE workflows SET filename=? WHERE id=?", (filename, wid))
+    save_tpl(wid, {"version": 1, "name": name, "workflow": wf,
+                   "params": params, "batch_node": data.get("batch_node")})
     return {"ok": True, "id": wid}
 
 
@@ -503,6 +638,8 @@ def api_workflow_get(wid):
         return err("模板不存在", 404)
     tpl = complete_select_options(load_tpl(row))
     wfmod.sort_params(tpl["params"])
+    if repair_template(tpl):
+        db.set_workflow_template(wid, tpl)  # 修复结果落库,下次直接可用
     return {"id": row["id"], "name": row["name"], "enabled": row["enabled"],
             "params": tpl["params"], "batch_node": tpl["batch_node"],
             "workflow": tpl["workflow"]}
@@ -522,22 +659,20 @@ def api_workflow_update(wid):
         if not params:
             return err("没有可用的参数定义")
         tpl["params"] = params
-    save_tpl_file(wid, tpl)
-    db.execute("UPDATE workflows SET filename=? WHERE id=?", (f"wf_{wid}.json", wid))
-    db.execute("UPDATE workflows SET name=? WHERE id=?", (tpl["name"], wid))
+    save_tpl(wid, tpl)
+    db.update_workflow_meta(wid, name=tpl["name"])
     if "enabled" in data:
         db.execute("UPDATE workflows SET enabled=? WHERE id=?",
-                   (1 if data.get("enabled") else 0, wid))
+                   (1 if data.get("enabled") else 0, int(wid)))
     return {"ok": True}
 
 
 @app.post("/api/workflows/<int:wid>/delete")
 def api_workflow_delete(wid):
-    row = db.query_one("SELECT * FROM workflows WHERE id=?", (wid,))
+    row = db.query_one("SELECT * FROM workflows WHERE id=?", (int(wid),))
     if not row:
         return err("模板不存在", 404)
-    tpl_path(row["filename"]).unlink(missing_ok=True)
-    db.execute("DELETE FROM workflows WHERE id=?", (wid,))
+    db.delete_workflow(int(wid))
     return {"ok": True}
 
 
@@ -738,7 +873,53 @@ def api_task_cancel(tid):
     return {"ok": True}
 
 
-# ---------- 图片代理 ----------
+# ---------- 图片代理(带磁盘缓存) ----------
+
+IMG_CACHE = db.DATA_DIR / "cache" / "img"
+IMG_CACHE_MAX_BYTES = 800 * 1024 * 1024  # 缓存目录上限,超过时淘汰最旧的 1/4
+
+
+def _img_cache_paths(key):
+    import hashlib
+    h = hashlib.sha1(key.encode()).hexdigest()
+    return IMG_CACHE / h, IMG_CACHE / (h + ".json")
+
+
+def img_cache_get(key):
+    """命中返回 (文件路径, content_type)。缩略图/封面内容不可变,不做 TTL。"""
+    p, m = _img_cache_paths(key)
+    if p.exists() and m.exists():
+        try:
+            return p, json.loads(m.read_text()).get("ct", "image/jpeg")
+        except (ValueError, OSError):
+            return None, None
+    return None, None
+
+
+def img_cache_store(key, content: bytes, ctype: str):
+    if len(content) > 30 * 1024 * 1024:
+        return  # 超大图不入缓存
+    try:
+        IMG_CACHE.mkdir(parents=True, exist_ok=True)
+        p, m = _img_cache_paths(key)
+        p.write_bytes(content)
+        m.write_text(json.dumps({"ct": ctype}))
+        if secrets.randbelow(50) == 0:  # 约 2% 概率触发裁剪
+            _img_cache_prune()
+    except OSError:
+        pass
+
+
+def _img_cache_prune():
+    files = [(f.stat().st_mtime, f) for f in IMG_CACHE.glob("*") if not f.name.endswith(".json")]
+    total = sum(f.stat().st_size for _, f in files)
+    if total <= IMG_CACHE_MAX_BYTES:
+        return
+    files.sort()
+    for _, f in files[: max(1, len(files) // 4)]:
+        f.unlink(missing_ok=True)
+        (IMG_CACHE / (f.name + ".json")).unlink(missing_ok=True)
+
 
 @app.get("/image")
 def image_proxy():
@@ -748,10 +929,23 @@ def image_proxy():
     subfolder = request.args.get("subfolder", "")
     img_type = request.args.get("type", "output")
     preview = request.args.get("preview")
+    # 仅缩略图落盘缓存(原图体积大,仍实时回源)
+    ck = None
+    if preview:
+        ck = f"img:{img_type}:{subfolder}:{filename}:{preview}"
+        cached_path, cached_ct = img_cache_get(ck)
+        if cached_path:
+            return Response(cached_path.read_bytes(),
+                            content_type=cached_ct or "image/jpeg",
+                            headers={"Cache-Control": "public, max-age=604800"})
     try:
         r = client.download_image(filename, subfolder, img_type, preview)
     except ComfyError as e:
         return err(e, 502)
+    body = r.content
+    r.close()
+    if ck:
+        img_cache_store(ck, body, r.headers.get("Content-Type", "image/jpeg"))
     headers = {"Cache-Control": "public, max-age=604800"}
     if request.args.get("dl"):
         # 中文前缀的文件名不能直接进 HTTP 头,按 RFC 5987 提供 UTF-8 文件名
@@ -760,7 +954,7 @@ def image_proxy():
         utf8_name = urlquote(filename)
         headers["Content-Disposition"] = (
             f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{utf8_name}')
-    return Response(stream_with_context(r.iter_content(16384)),
+    return Response(body,
                     content_type=r.headers.get("Content-Type", "image/png"),
                     headers=headers)
 
@@ -827,26 +1021,8 @@ def healthz():
     return "ok"
 
 
-def migrate_tpl_filenames():
-    """旧版随机文件名(wf_<hex>.json)迁移为按行 id 命名(wf_<id>.json)。"""
-    for row in db.query("SELECT id, filename FROM workflows"):
-        want = f"wf_{row['id']}.json"
-        if row["filename"] == want:
-            continue
-        try:
-            data = load_tpl(row)
-        except (OSError, ValueError, json.JSONDecodeError):
-            continue
-        save_tpl_file(row["id"], data)
-        db.execute("UPDATE workflows SET filename=? WHERE id=?", (want, row["id"]))
-        try:
-            tpl_path(row["filename"]).unlink()
-        except OSError:
-            pass
-
-
 db.init_db()
-migrate_tpl_filenames()
+migrate_tpl_files()
 client.ensure_ws()
 
 

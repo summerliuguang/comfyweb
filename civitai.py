@@ -119,6 +119,42 @@ def search(q=None, types=("Checkpoint",), base=None, sort="Most Downloaded",
     return {"items": items, "nextCursor": (data.get("metadata") or {}).get("nextCursor")}
 
 
+def match_by_filename(stem, ctype):
+    """按文件名在 Civitai 匹配模型:精确同名(去分隔符)>互相包含。
+
+    返回 {civ_id, civ_name, base_model, trained_words, cover} 或 None。
+    """
+    def norm(s):
+        return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", (s or "").lower())
+
+    target = norm(stem)
+    if not target:
+        return None
+    data = get_json("/models", {"query": stem, "types": ctype, "limit": 5, "nsfw": "true"})
+    best = None
+    for it in data.get("items") or []:
+        for v in it.get("modelVersions") or []:
+            for f in v.get("files") or []:
+                n = norm(f.get("name", "").rsplit(".", 1)[0])
+                if not n:
+                    continue
+                if n == target:
+                    score = 100
+                elif target in n or n in target:
+                    score = 60
+                else:
+                    continue
+                if best is None or score > best["_score"]:
+                    best = {"_score": score, "civ_id": it.get("id"),
+                            "civ_name": it.get("name") or "",
+                            "base_model": v.get("baseModel") or "",
+                            "trained_words": v.get("trainedWords") or [],
+                            "cover": ((v.get("images") or [{}])[0].get("url") or "")}
+    if best:
+        best.pop("_score")
+    return best
+
+
 def get_model(model_id):
     data = cached("civmodel:" + str(model_id), 600,
                   lambda: get_json(f"/models/{int(model_id)}"))

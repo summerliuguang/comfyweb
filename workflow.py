@@ -25,6 +25,7 @@ param 结构:
 }
 """
 import copy
+import re
 import secrets
 
 PROMPT_CLASS = "CLIPTextEncode"
@@ -78,6 +79,13 @@ def _cast(s0, val):
             return str(val)
     except (TypeError, ValueError):
         return val
+    return val
+
+
+def _norm_combo_str(val):
+    """Windows 上 ComfyUI 保存 UI JSON 会把子目录路径存成双反斜杠,归一为单反斜杠。"""
+    if isinstance(val, str):
+        return re.sub(r"\\{2,}", lambda m: "\\", val)
     return val
 
 
@@ -179,7 +187,16 @@ def ui_to_api(uiwf, object_info):
             # 新版部分节点(如 VHS_VideoCombine)按键名保存,逐名对位最稳
             for name, spec in specs.items():
                 if name in widgets:
-                    values[name] = _cast(spec[0], widgets[name])
+                    s0, meta = spec
+                    v = widgets[name]
+                    if isinstance(s0, list):
+                        v = _norm_combo_str(v)
+                    casted = _cast(s0, v)
+                    if casted in ("", None) and s0 in ("INT", "FLOAT"):
+                        casted = meta.get("default")
+                    if casted in ("", None):
+                        continue
+                    values[name] = casted
         else:
             widgets = list(widgets or [])
             wi = 0
@@ -199,7 +216,14 @@ def ui_to_api(uiwf, object_info):
                 if meta.get("control_after_generate") and wi < len(widgets) \
                         and isinstance(widgets[wi], str):
                     wi += 1
-                values[name] = _cast(s0, val)
+                if isinstance(s0, list):
+                    val = _norm_combo_str(val)
+                casted = _cast(s0, val)
+                if casted in ("", None) and s0 in ("INT", "FLOAT"):
+                    casted = meta.get("default")
+                if casted in ("", None):
+                    continue
+                values[name] = casted
 
         inputs = {}
         for name, link_id in link_refs.items():
@@ -375,6 +399,16 @@ def combo_options(object_info, cls, name):
     return _combo_from_object_info(object_info, cls, name)
 
 
+def input_default(object_info, cls, name):
+    """取 object_info 里某数值/布尔输入的声明默认值;没有返回 None。"""
+    info = (object_info or {}).get(cls) or {}
+    inputs = info.get("input") or {}
+    spec = (inputs.get("required") or {}).get(name) or (inputs.get("optional") or {}).get(name)
+    if isinstance(spec, list) and len(spec) > 1 and isinstance(spec[1], dict):
+        return spec[1].get("default")
+    return None
+
+
 def _combo_from_object_info(object_info, cls, name):
     options = _infer_widget(cls, name, None, lambda c, n: _raw_meta(object_info, c, n))
     return options.get("options") or []
@@ -465,6 +499,8 @@ def build_prompt(template, values, count=None, random_seed=True):
             raw = coerce_value(p, raw)
             seed = raw
         val = coerce_value(p, raw)
+        if p.get("widget") == "select" and isinstance(val, str):
+            val = _norm_combo_str(val)  # 旧模板里可能残留双反斜杠的子目录路径
         node = prompt.get(p["node_id"])
         if node is not None and p["input"] in (node.get("inputs") or {}):
             node["inputs"][p["input"]] = val
@@ -474,4 +510,12 @@ def build_prompt(template, values, count=None, random_seed=True):
         node = prompt.get(str(template["batch_node"]))
         if node is not None and "batch_size" in (node.get("inputs") or {}):
             node["inputs"]["batch_size"] = int(count)
+    if not prompt_text:
+        # 工作流的提示词节点不直接接采样器时(中间有其他节点),取第一个可见文本域兜底
+        for p in params:
+            if p.get("visible") and p.get("widget") == "textarea":
+                v = values.get(p["name"], p.get("value"))
+                if isinstance(v, str) and v:
+                    prompt_text = v
+                    break
     return prompt, prompt_text, seed
