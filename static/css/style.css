@@ -43,22 +43,58 @@ details.adv[open]>summary::before{transform:rotate(90deg)}
 .task-err{color:var(--bad);font-size:.8rem;margin-top:.4rem;white-space:pre-wrap;word-break:break-all}
 .task-prompt{font-size:.78rem;color:var(--muted);margin-top:.25rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
-/* 画廊 */
-.gallery-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:.6rem}
-@media(min-width:640px){.gallery-grid{grid-template-columns:repeat(3,1fr)}}
-@media(min-width:900px){.gallery-grid{grid-template-columns:repeat(4,1fr)}}
-.gitem{display:block;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--card);transition:border-color .18s ease}
-.gitem:hover{border-color:#c9cfdd}
-.gitem img{width:100%;aspect-ratio:1;object-fit:cover;display:block}
-.gitem .gmeta{padding:.4rem .55rem;font-size:.7rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-top:1px solid var(--line)}
+/* 画廊:瀑布流图片墙 */
+.gfilter{display:flex;flex-wrap:wrap;gap:.4rem;margin-bottom:.7rem;align-items:center}
+.gfilter .input,.gfilter .select select{font-size:.82rem}
+.gfilter .input{max-width:11rem}
+.gfilter .select{max-width:11rem}
+.gfilter select.select{max-width:11rem;padding:.35rem .4rem;border:1px solid var(--line);border-radius:var(--radius-s);background:var(--card);color:var(--text)}
+.masonry{column-count:2;column-gap:.6rem}
+@media(min-width:640px){.masonry{column-count:3}}
+@media(min-width:900px){.masonry{column-count:4}}
+.masonry .gitem{break-inside:avoid;margin:0 0 .6rem;display:block;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--card);transition:border-color .18s ease}
+.masonry .gitem:hover{border-color:#c9cfdd}
+.masonry .gitem img{width:100%;height:auto;aspect-ratio:auto;display:block}
+.masonry .gitem .gmeta{padding:.35rem .5rem;font-size:.7rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-top:1px solid var(--line)}
 
 /* 画廊详情 */
-.detail-img{max-width:100%;border-radius:var(--radius);border:1px solid var(--line);display:block;margin:0 auto}
+.detail-stage{position:relative;display:flex;justify-content:center;align-items:center;min-height:14rem;touch-action:pan-x}
+.detail-stage img{max-width:100%;max-height:68vh;border-radius:var(--radius);border:1px solid var(--line);display:block;cursor:zoom-in}
+.dnav{position:absolute;top:50%;transform:translateY(-50%);border:1px solid var(--line);background:var(--card);color:var(--text);width:2.2rem;height:2.2rem;border-radius:50%;font-size:1.1rem;line-height:1;cursor:pointer;opacity:.75}
+.dnav:hover{opacity:1}
+.dnav.prev{left:.3rem}
+.dnav.next{right:.3rem}
+.dnav[hidden]{display:none}
+.dhint{text-align:center;font-size:.7rem;color:var(--muted);margin-top:.4rem}
+.brief-bar{display:flex;width:100%;gap:.6rem;align-items:baseline;justify-content:space-between;padding:.5rem .7rem;margin-top:.6rem;border:1px solid var(--line);border-radius:var(--radius);background:var(--card);cursor:pointer;font-size:.78rem;color:var(--muted)}
+.brief-bar .b-prompt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
+.brief-bar .b-meta{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:45%}
+.brief-bar .chev{flex:none}
+.info-panel{margin-top:.6rem}
 .kv{width:100%;border-collapse:collapse;font-size:.85rem}
 .kv td{padding:.35rem .4rem;border-bottom:1px solid var(--line);vertical-align:top}
 .kv td:first-child{color:var(--muted);width:8rem;white-space:nowrap}
 .kv tr:last-child td{border-bottom:none}
 .kv .val{word-break:break-all;white-space:pre-wrap}
+/* 手机端信息:字段在上、值在下,逐项堆叠 */
+@media(max-width:899px){
+  .kv,.kv tbody{display:block}
+  .kv tr{display:block;padding:.5rem .15rem;border-bottom:1px solid var(--line)}
+  .kv td{display:block;border-bottom:none;padding:0}
+  .kv td:first-child{width:auto;font-size:.72rem;margin-bottom:.15rem}
+}
+
+/* 灯箱 */
+.lightbox{position:fixed;inset:0;z-index:1000;background:rgba(8,10,16,.94);user-select:none;-webkit-user-select:none;touch-action:none}
+.lightbox .lb-stage{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
+.lightbox .lb-img{max-width:94vw;max-height:82vh;transition:transform .15s ease}
+.lightbox.focus .lb-img{transition:none;cursor:grab}
+.lightbox.focus .lb-img:active{cursor:grabbing}
+.lightbox .lb-close{position:absolute;top:.6rem;right:.8rem;z-index:2;background:none;border:none;color:#fff;font-size:1.7rem;line-height:1;cursor:pointer;padding:.3rem}
+.lightbox .lb-count{position:absolute;top:.9rem;left:1rem;color:#cfd4e0;font-size:.85rem}
+.lightbox .lb-cap{position:absolute;bottom:2.4rem;left:50%;transform:translateX(-50%);max-width:86vw;color:#cfd4e0;font-size:.75rem;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lightbox .lb-hint{position:absolute;bottom:.7rem;left:0;right:0;text-align:center;color:#8b93a7;font-size:.68rem}
+.lightbox.hidden-x{display:none}
 
 /* 状态圆点(状态文字复用 skin.css 的 .status) */
 .dot-queued::before{background:var(--warn)!important}

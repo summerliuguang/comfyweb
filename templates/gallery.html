@@ -3,21 +3,48 @@
 {% block content %}
 <div class="page-head">
   <h1 class="title is-4">画廊 <span class="tag is-light">{{ total }} 张</span></h1>
-  <form method="get" action="/gallery" style="display:flex;gap:.4rem;flex:1;max-width:20rem">
-    <input class="input is-small" type="search" name="q" value="{{ q }}" placeholder="按提示词搜索">
-    <button class="button is-small is-link" type="submit">搜索</button>
-  </form>
 </div>
 
 <div class="panel">
+  <form class="gfilter" method="get" action="/gallery">
+    <input class="input is-small" type="search" name="q" value="{{ q }}" placeholder="提示词关键字">
+    <select class="select is-small" name="wf" title="工作流">
+      <option value="">全部工作流</option>
+      {% for w in opts.workflows %}
+      <option value="{{ w }}" {{ 'selected' if cur.get('wf') == w }}>{{ w }}</option>
+      {% endfor %}
+    </select>
+    <select class="select is-small" name="model" title="模型">
+      <option value="">全部模型</option>
+      {% for m, label in opts.models %}
+      <option value="{{ m }}" {{ 'selected' if cur.get('model') == m }}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    <select class="select is-small" name="lora" title="LoRA">
+      <option value="">全部 LoRA</option>
+      {% for l, label in opts.loras %}
+      <option value="{{ l }}" {{ 'selected' if cur.get('lora') == l }}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    <select class="select is-small" name="range">
+      {% for k, v in ranges.items() %}
+      <option value="{{ k }}" {{ 'selected' if cur.get('range', 'all') == k }}>{{ v }}</option>
+      {% endfor %}
+    </select>
+    <button class="button is-small is-link" type="submit">筛选</button>
+    {% if q or cur.get('wf') or cur.get('model') or cur.get('lora') or cur.get('range') in ('today', '7d', '30d') %}
+    <a class="button is-small is-light" href="/gallery">清除</a>
+    {% endif %}
+  </form>
+
   {% if not items %}
   <div class="empty">
-    {% if q %}没有匹配「{{ q }}」的图片。{% else %}还没有生成过图片。{% endif %}
+    {% if q or cur.get('wf') or cur.get('model') or cur.get('lora') %}没有符合条件的图片。{% else %}还没有生成过图片。{% endif %}
   </div>
   {% else %}
-  <div class="gallery-grid">
+  <div class="masonry">
     {% for it in items %}
-    <a class="gitem" href="/gallery/image/{{ it.id }}">
+    <a class="gitem" href="/gallery/image/{{ it.id }}{% if qs %}?{{ qs }}{% endif %}">
       <img src="{{ it.thumb }}" loading="lazy" alt="生成图片">
       <div class="gmeta" title="{{ it.prompt_text }}">{{ it.prompt_text or it.workflow_name or '(无提示词)' }}</div>
     </a>
@@ -25,9 +52,9 @@
   </div>
   {% if pages > 1 %}
   <div class="pager">
-    {% if page > 1 %}<a class="button is-small" href="/gallery?q={{ q }}&page={{ page - 1 }}">上一页</a>{% endif %}
+    {% if page > 1 %}<a class="button is-small" href="/gallery?{{ qs }}{{ '&' if qs else '' }}page={{ page - 1 }}">上一页</a>{% endif %}
     <span>第 {{ page }} / {{ pages }} 页</span>
-    {% if page < pages %}<a class="button is-small" href="/gallery?q={{ q }}&page={{ page + 1 }}">下一页</a>{% endif %}
+    {% if page < pages %}<a class="button is-small" href="/gallery?{{ qs }}{{ '&' if qs else '' }}page={{ page + 1 }}">下一页</a>{% endif %}
   </div>
   {% endif %}
   {% endif %}

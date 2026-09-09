@@ -62,6 +62,10 @@
     try {
       const d = await api('/api/remote/workflows');
       document.getElementById('srvCount').textContent = d.workflows.length + ' 个';
+      const imported = {};
+      for (const c of (d.imported || [])) {
+        (imported[c.source] = imported[c.source] || []).push(c);
+      }
       box.innerHTML = '';
       if (!d.workflows.length) {
         box.innerHTML = '<p class="empty">ComfyUI 里还没有「保存」过的工作流</p>';
@@ -70,12 +74,23 @@
       for (const n of d.workflows) {
         const row = document.createElement('div');
         row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:.6rem;padding:.45rem 0;border-bottom:1px solid var(--line);flex-wrap:wrap';
+        const left = document.createElement('div');
+        left.style.cssText = 'display:flex;align-items:center;gap:.45rem;flex:1;min-width:10rem;flex-wrap:wrap';
         const nm = document.createElement('span');
         nm.textContent = n.replace(/\.json$/, '');
-        nm.style.cssText = 'font-size:.88rem;font-weight:600;flex:1;min-width:10rem';
-        row.appendChild(nm);
+        nm.style.cssText = 'font-size:.88rem;font-weight:600';
+        left.appendChild(nm);
+        const copies = imported[n] || [];
+        if (copies.length) {
+          const tag = document.createElement('span');
+          tag.className = 'tag is-small is-link is-light';
+          tag.textContent = `已导入 ×${copies.length}`;
+          tag.title = copies.map(c => c.name).join('\n');
+          left.appendChild(tag);
+        }
+        row.appendChild(left);
         const btns = document.createElement('div');
-        btns.style.cssText = 'display:flex;gap:.4rem';
+        btns.style.cssText = 'display:flex;gap:.4rem;flex-wrap:wrap';
         const quick = document.createElement('button');
         quick.className = 'button is-small is-link is-light';
         quick.textContent = '快速导入';
@@ -98,6 +113,22 @@
           location.href = '/workflows/import';
         });
         btns.append(quick, review);
+        if (copies.length) {
+          const del = document.createElement('button');
+          del.className = 'button is-small is-danger is-light';
+          del.textContent = '删除导入';
+          const latest = copies[copies.length - 1];
+          del.title = '删除已导入的模板:' + copies.map(c => c.name).join('、');
+          del.addEventListener('click', async () => {
+            const more = copies.length > 1 ? `(共 ${copies.length} 份,将删除最新的一份)` : '';
+            if (!confirm(`删除已导入的模板「${latest.name}」?${more}\n生成记录与图片不受影响。`)) return;
+            del.classList.add('is-loading');
+            const r = await fetch(`/api/workflows/${latest.id}/delete`, { method: 'POST' });
+            if (r.ok) location.reload();
+            else { del.classList.remove('is-loading'); const d2 = await r.json().catch(() => ({})); alert(d2.error || r.status); }
+          });
+          btns.appendChild(del);
+        }
         row.appendChild(btns);
         box.appendChild(row);
       }

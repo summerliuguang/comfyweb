@@ -237,15 +237,20 @@
     if (t.images && t.images.length) {
       const g = document.createElement('div');
       g.className = 'task-imgs';
-      for (const im of t.images.slice(0, 8)) {
+      const list = t.images.map(im => ({ url: im.url, thumb: im.thumb }));
+      t.images.slice(0, 8).forEach((im, i) => {
         const a = document.createElement('a');
-        a.href = '/gallery/image/' + im.id;
+        a.href = im.url;
+        a.addEventListener('click', (ev) => {
+          ev.preventDefault();
+          Lightbox.open(list, i, { caption: t.prompt_text || '' });
+        });
         const img = document.createElement('img');
         img.src = im.thumb;
         img.loading = 'lazy';
         a.appendChild(img);
         g.appendChild(a);
-      }
+      });
       d.appendChild(g);
     }
     const row = document.createElement('div');
