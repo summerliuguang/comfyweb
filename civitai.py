@@ -49,14 +49,27 @@ def _proxies():
     return {"http": proxy, "https": proxy}
 
 
+_sess_obj = None
+
+
 def _session():
-    """带代理与凭据的会话;代理经 Session 属性注入,调用点不出现 proxies 参数。"""
-    s = requests.Session()
-    s.proxies = _proxies() or {}
-    token = (db.get_setting("civitai_token") or "").strip()
-    if token:
-        s.headers["Authorization"] = f"Bearer {token}"
-    return s
+    """带代理与凭据的会话(模块级复用,省去每请求 TLS 握手);
+    代理/Token 变更后由 reset_session() 重建。"""
+    global _sess_obj
+    if _sess_obj is None:
+        s = requests.Session()
+        s.proxies = _proxies() or {}
+        token = (db.get_setting("civitai_token") or "").strip()
+        if token:
+            s.headers["Authorization"] = f"Bearer {token}"
+        _sess_obj = s
+    return _sess_obj
+
+
+def reset_session():
+    """设置页改了代理/Token 后调用,丢弃旧会话。"""
+    global _sess_obj
+    _sess_obj = None
 
 
 def _api_url(path):

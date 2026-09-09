@@ -20,7 +20,14 @@
     return data;
   }
 
-  function saveDraft() {
+  let draftTimer = null;
+  function saveDraft() {          // 输入事件高频触发,300ms 防抖后再写 localStorage
+    if (!tpl) return;
+    clearTimeout(draftTimer);
+    draftTimer = setTimeout(_saveDraft, 300);
+  }
+
+  function _saveDraft() {
     if (!tpl) return;
     const values = {};
     for (const el of formArea.querySelectorAll('[data-pname]')) {
