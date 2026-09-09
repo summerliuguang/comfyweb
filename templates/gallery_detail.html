@@ -4,67 +4,44 @@
 <div class="viewer" id="viewer">
   <div class="v-top">
     <a class="vchip" href="/gallery{% if qs %}?{{ qs }}{% endif %}">‹ 画廊</a>
-    <span class="vchip v-count">{{ item.pos }}/{{ item.total }}</span>
+    <span class="vchip v-count" id="posEl">{{ idx + 1 }}/{{ neighbors|length }}</span>
     <button class="vchip v-btn" id="btnBg" type="button" title="切换背景色">◐</button>
   </div>
 
   <div class="v-stage" id="stage">
-    {% if item.prev_id %}<button class="dnav prev" id="btnPrev" title="上一张(↑)">‹</button>{% endif %}
+    <button class="dnav prev" id="btnPrev" title="上一张(↑)">‹</button>
     <img id="detailImg" src="{{ item.url }}" alt="生成图片">
-    {% if item.next_id %}<button class="dnav next" id="btnNext" title="下一张(↓)">›</button>{% endif %}
+    <button class="dnav next" id="btnNext" title="下一张(↓)">›</button>
   </div>
 
-  <div class="dhint" id="dhint">上下滑动 / 滚轮 / ↑↓ 键切换 · 点击图片放大 · ◐ 切换背景</div>
+  <div class="dhint" id="dhint">上下滑动切换 · 双指捏合缩放(松手小于原大自动回弹) · ◐ 切换背景</div>
+
+  <div class="v-toast" id="vToast"></div>
 
   <div class="sheet" id="sheet">
     <div class="sheet-head" id="sheetHead">
-      <div class="s-prompt">{{ item.prompt_text or '(无提示词)' }}</div>
+      <div class="s-prompt" id="sPrompt">{{ item.prompt_text or '(无提示词)' }}</div>
       <div class="s-row2">
-        <span class="s-meta">{{ item.workflow_name }}{% if item.model_short %} · {{ item.model_short }}{% endif %} · {{ item.task_created }}</span>
+        <span class="s-meta" id="sMeta">{{ item.workflow_name }}{% if item.model_short %} · {{ item.model_short }}{% endif %} · {{ item.task_created }}</span>
         <span class="chev" id="briefChev">详情 ▾</span>
       </div>
     </div>
-    <div class="sheet-body" id="sheetBody" hidden>
-      <table class="kv">
-      <tr><td>工作流</td><td>{{ item.workflow_name }}</td></tr>
-      {% if item.model %}
-      <tr><td>模型</td><td class="val">{{ item.model }}</td></tr>
-      {% endif %}
-      {% if item.lora %}
-      <tr><td>LoRA</td><td class="val">{{ item.lora }}</td></tr>
-      {% endif %}
-      <tr><td>生成时间</td><td>{{ item.task_created }}</td></tr>
-      {% if item.prompt_text %}
-      <tr><td>正面提示词</td><td class="val">{{ item.prompt_text }}</td></tr>
-      {% endif %}
-      {% if item.seed is not none %}
-      <tr><td>种子</td><td class="val">{{ item.seed }}</td></tr>
-      {% endif %}
-      {% for p in item.params %}
-      {% if p.label != '随机种子' or item.seed is none %}
-      <tr><td>{{ p.label }}</td><td class="val">{{ p.value }}</td></tr>
-      {% endif %}
-      {% endfor %}
-    </table>
-    <div class="buttons" style="margin-top:.9rem">
-      <a class="button is-link is-small" href="{{ item.download }}" download>下载原图</a>
-      {% if item.workflow_id %}
-      <a class="button is-light is-small" href="/?template={{ item.workflow_id }}&task={{ item.id }}">再次生成</a>
-      {% endif %}
-      <button class="button is-danger is-light is-small" id="btnDelete">删除记录</button>
-    </div>
-  </div>
+    <div class="sheet-body" id="sheetBody" hidden></div>
   </div>
 </div>
 {% endblock %}
 {% block scripts %}
-<script src="/static/js/lightbox.js"></script>
 <script>
 (function () {
   const qs = '{{ qs }}';
-  const go = (id) => { location.href = '/gallery/image/' + id + (qs ? '?' + qs : ''); };
-  const prev = {{ item.prev_id | tojson }}, next = {{ item.next_id | tojson }};
+  const NEIGHBORS = {{ neighbors | tojson }};
+  let cur = {{ idx }};
   const viewer = document.getElementById('viewer');
+  const img = document.getElementById('detailImg');
+  const posEl = document.getElementById('posEl');
+  const btnPrev = document.getElementById('btnPrev'), btnNext = document.getElementById('btnNext');
+  const sheet = document.getElementById('sheet'), sheetBody = document.getElementById('sheetBody');
+  const paramsCache = {};   // imgId -> 参数表 HTML
 
   /* 背景色:黑(默认)/白,记忆选择 */
   if (localStorage.getItem('comfyweb.viewerbg') === 'light') viewer.classList.add('light');
@@ -73,71 +50,222 @@
     localStorage.setItem('comfyweb.viewerbg', light ? 'light' : 'dark');
   });
 
+  /* 首尾提示 toast */
+  const toastEl = document.getElementById('vToast');
+  let toastTimer = null;
+  function toast(msg) {
+    toastEl.textContent = msg;
+    toastEl.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toastEl.classList.remove('show'), 1400);
+  }
+
+  /* 静默预加载当前图前后各 10 张(原图),切换零等待 */
+  const preloaded = new Set();
+  function preload() {
+    for (let i = Math.max(0, cur - 10); i <= Math.min(NEIGHBORS.length - 1, cur + 10); i++) {
+      const u = NEIGHBORS[i].url;
+      if (!preloaded.has(u)) { preloaded.add(u); new Image().src = u; }
+    }
+  }
+
+  function esc(s) {
+    return String(s ?? '').replace(/[&<>"']/g,
+      c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  async function renderSheetBody(it) {
+    if (sheetBody.hidden) return;
+    if (!paramsCache[it.id]) {
+      sheetBody.innerHTML = '<p class="hint" style="padding:.4rem 0">加载参数…</p>';
+      let d;
+      try {
+        const r = await fetch(`/api/gallery/image/${it.id}/params`);
+        d = await r.json();
+        if (!r.ok) throw new Error(d.error || r.status);
+      } catch (e) {
+        sheetBody.innerHTML = `<p class="task-err">参数加载失败: ${esc(e.message)}</p>`;
+        return;
+      }
+      const rows = [];
+      rows.push(['工作流', esc(d.workflow_name)]);
+      if (d.model) rows.push(['模型', esc(d.model)]);
+      if (d.lora) rows.push(['LoRA', esc(d.lora)]);
+      rows.push(['生成时间', esc(d.created_at)]);
+      if (d.prompt_text) rows.push(['正面提示词', esc(d.prompt_text)]);
+      const hasSeed = d.seed !== null && d.seed !== undefined;
+      if (hasSeed) rows.push(['种子', esc(d.seed)]);
+      for (const p of d.params || []) {
+        if (p.label === '随机种子' && hasSeed) continue;
+        rows.push([esc(p.label), esc(p.value)]);
+      }
+      const dl = it.url + '&dl=1';
+      const again = it.w ? `<a class="button is-light is-small" href="/?template=${it.w}&task=${it.id}">再次生成</a>` : '';
+      paramsCache[it.id] =
+        '<table class="kv">' +
+        rows.map(([k, v]) => `<tr><td>${k}</td><td class="val">${v}</td></tr>`).join('') +
+        '</table><div class="buttons" style="margin-top:.9rem">' +
+        `<a class="button is-link is-small" href="${dl}" download>下载原图</a>${again}` +
+        '<button class="button is-danger is-light is-small" id="btnDelete">删除记录</button>' +
+        '</div>';
+    }
+    sheetBody.innerHTML = paramsCache[it.id];
+  }
+
+  /* sheet 内按钮用事件委托(内容随图片切换重建) */
+  sheetBody.addEventListener('click', async (e) => {
+    if (e.target.id !== 'btnDelete') return;
+    if (!confirm('从画廊删除这条图片记录?')) return;
+    const r = await fetch(`/api/gallery/image/${NEIGHBORS[cur].id}/delete`, { method: 'POST' });
+    if (r.ok) {
+      NEIGHBORS.splice(cur, 1);
+      delete paramsCache[NEIGHBORS[cur] ? NEIGHBORS[cur].id : -1];
+      if (!NEIGHBORS.length) { location.href = '/gallery'; return; }
+      toast('已删除');
+      cur = Math.min(cur, NEIGHBORS.length - 1);
+      goTo(cur, false, true);
+      renderSheetBody(NEIGHBORS[cur]);
+    } else { const d = await r.json().catch(() => ({})); alert(d.error || r.status); }
+  });
+
+  /* AJAX 切换:带方向动画,地址栏同步,无需整页刷新 */
+  let switching = false;
+  function goTo(i, anim, force) {
+    i = Math.max(0, Math.min(NEIGHBORS.length - 1, i));
+    if (i === cur && img.src && !force) { syncArrows(); return; }
+    if (switching) return;
+    const dir = i > cur ? 'next' : 'prev';
+    cur = i;
+    const it = NEIGHBORS[cur];
+    switching = true;
+    img.classList.remove('anim-next', 'anim-prev');
+    void img.offsetWidth;  // 重启动画
+    if (anim) img.classList.add(dir === 'next' ? 'anim-next' : 'anim-prev');
+    img.src = it.url;
+    img.onload = () => { switching = false; };
+    setTimeout(() => { switching = false; }, 900);  // 加载卡住时兜底
+    posEl.textContent = `${cur + 1}/${NEIGHBORS.length}`;
+    document.getElementById('sPrompt').textContent = it.prompt || '(无提示词)';
+    document.getElementById('sMeta').textContent =
+      [it.wf, it.m, it.ts].filter(Boolean).join(' · ');
+    syncArrows();
+    history.replaceState(null, '', `/gallery/image/${it.id}` + (qs ? '?' + qs : ''));
+    renderSheetBody(it);
+    preload();
+  }
+
+  function syncArrows() {
+    btnPrev.hidden = cur <= 0;
+    btnNext.hidden = cur >= NEIGHBORS.length - 1;
+  }
+
+  function step(d) {
+    if (scale > 1.02) { resetT(); return; }   // 放大状态先恢复原大,再操作
+    const target = cur + d;
+    if (target < 0) { toast('已经是第一张'); return; }
+    if (target > NEIGHBORS.length - 1) { toast('已经是最后一张'); return; }
+    goTo(target, true);
+  }
+
   /* 上/下一张:按钮、滚轮、键盘 */
-  document.getElementById('btnPrev')?.addEventListener('click', () => prev && go(prev));
-  document.getElementById('btnNext')?.addEventListener('click', () => next && go(next));
+  btnPrev.addEventListener('click', () => step(-1));
+  btnNext.addEventListener('click', () => step(1));
   document.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-    if (e.key === 'ArrowUp' && prev) go(prev);
-    if (e.key === 'ArrowDown' && next) go(next);
+    if (e.key === 'ArrowUp') step(-1);
+    if (e.key === 'ArrowDown') step(1);
   });
   let wheelLock = 0;
   document.addEventListener('wheel', (e) => {
     const now = Date.now();
     if (now - wheelLock < 500 || Math.abs(e.deltaY) < 20) return;
     wheelLock = now;
-    if (e.deltaY > 0 && next) go(next);
-    else if (e.deltaY < 0 && prev) go(prev);
+    step(e.deltaY > 0 ? 1 : -1);
   }, { passive: true });
 
-  /* 触屏上下滑动切换(touch-action:none 已禁浏览器手势,touchcancel 也计入) */
+  /* 手势(统一 Pointer Events;viewer 已 touch-action:none 禁浏览器接管):
+     单指 + 原大 → 上下滑切换;双指捏合 → 缩放;放大后单指 → 平移;
+     松手时图片小于原大自动回弹恢复,恢复后才能再滑切换 */
   const stage = document.getElementById('stage');
-  let sy = 0, swiping = false;
-  const onTouchEnd = (e) => {
-    if (!swiping) return;
-    swiping = false;
-    const dy = e.changedTouches[0].clientY - sy;
-    if (Math.abs(dy) < 48) return;
-    if (dy < 0 && next) go(next);
-    else if (dy > 0 && prev) go(prev);
+  let ptrs = new Map(), startDist = 0, startScale = 1;
+  let sy = 0, swiping = false, swiped = false, lastX = 0, lastY = 0;
+  let scale = 1, tx = 0, ty = 0;
+  const applyT = () => { img.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`; };
+  const resetT = () => {
+    scale = 1; tx = 0; ty = 0;
+    img.classList.add('snapping'); applyT();
+    setTimeout(() => img.classList.remove('snapping'), 240);
   };
-  stage.addEventListener('touchstart', (e) => {
-    if (e.touches.length === 1) { sy = e.touches[0].clientY; swiping = true; }
-  }, { passive: true });
-  stage.addEventListener('touchend', onTouchEnd, { passive: true });
-  stage.addEventListener('touchcancel', onTouchEnd, { passive: true });
 
-  /* 点图片:sheet 展开时先收起,否则进灯箱放大(滑动后的幽灵点击要忽略) */
-  let lastSwipe = 0;
-  stage.addEventListener('touchend', () => {
-    if (swiping) return;
-    lastSwipe = Date.now();
-  }, { passive: true });
+  stage.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse') return;   // 鼠标不参与触摸手势
+    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    try { stage.setPointerCapture(e.pointerId); } catch (err) {}
+    if (ptrs.size === 1) {
+      sy = e.clientY; lastX = e.clientX; lastY = e.clientY;
+      swiping = true; swiped = false;
+    } else if (ptrs.size === 2) {
+      const [a, b] = [...ptrs.values()];
+      startDist = Math.hypot(a.x - b.x, a.y - b.y);
+      startScale = scale;
+      swiping = false; swiped = false;
+    }
+  });
+  stage.addEventListener('pointermove', (e) => {
+    if (!ptrs.has(e.pointerId)) return;
+    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (ptrs.size === 2) {                   // 捏合缩放
+      const [a, b] = [...ptrs.values()];
+      const d = Math.hypot(a.x - b.x, a.y - b.y);
+      scale = Math.min(8, Math.max(0.3, startScale * d / (startDist || 1)));
+      applyT();
+    } else if (ptrs.size === 1) {
+      if (scale > 1.02) {                    // 放大态:单指平移
+        tx += e.clientX - lastX; ty += e.clientY - lastY;
+        lastX = e.clientX; lastY = e.clientY;
+        applyT();
+      } else if (Math.abs(e.clientY - sy) > 10) {
+        swiped = true;                       // 有位移,吞掉之后的点击
+      }
+    }
+  });
+  const endPtr = (e) => {
+    if (!ptrs.has(e.pointerId)) return;
+    ptrs.delete(e.pointerId);
+    if (ptrs.size < 2 && scale < 1) resetT();          // 小于原大:回弹恢复
+    if (ptrs.size === 0) {
+      if (scale <= 1.02 && swiping) {
+        const dy = e.clientY - sy;
+        if (Math.abs(dy) >= 48) {                      // 原大状态上下滑切换
+          swiped = true; setTimeout(() => { swiped = false; }, 500);
+          step(dy < 0 ? 1 : -1);
+        }
+      }
+      swiping = false;
+      if (scale <= 1.02 && (tx || ty)) resetT();
+    }
+  };
+  stage.addEventListener('pointerup', endPtr);
+  stage.addEventListener('pointercancel', endPtr);
+
+  /* 点图片:sheet 展开时先收起(放大改由双指捏合,不再点击进灯箱) */
   document.getElementById('detailImg').addEventListener('click', () => {
-    if (Date.now() - lastSwipe < 500) return;
-    const sheet = document.getElementById('sheet');
-    if (sheet.classList.contains('open')) { setSheet(false); return; }
-    Lightbox.open([{ url: document.getElementById('detailImg').src,
-                     caption: {{ item.prompt_text | tojson }} }], 0);
+    if (swiped) return;
+    if (sheet.classList.contains('open')) setSheet(false);
   });
 
   /* 底部 sheet:收起=两行摘要(顶部圆角),展开=完整参数抽屉,点头部开合 */
-  const sheet = document.getElementById('sheet');
   function setSheet(open) {
     sheet.classList.toggle('open', open);
-    document.getElementById('sheetBody').hidden = !open;
+    sheetBody.hidden = !open;
     document.getElementById('briefChev').textContent = open ? '收起 ▴' : '详情 ▾';
+    if (open) renderSheetBody(NEIGHBORS[cur]);
   }
   document.getElementById('sheetHead').addEventListener('click', () =>
     setSheet(!sheet.classList.contains('open')));
 
-  document.getElementById('btnDelete').addEventListener('click', async (e) => {
-    e.stopPropagation();
-    if (!confirm('从画廊删除这条图片记录?')) return;
-    const r = await fetch('/api/gallery/image/{{ item.id }}/delete', { method: 'POST' });
-    if (r.ok) location.href = '/gallery';
-    else { const d = await r.json().catch(() => ({})); alert(d.error || r.status); }
-  });
+  syncArrows();
+  preload();
 })();
 </script>
 {% endblock %}

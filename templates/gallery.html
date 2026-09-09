@@ -60,3 +60,53 @@
   {% endif %}
 </div>
 {% endblock %}
+{% block scripts %}
+{% if items %}
+<script>
+/* 瀑布流:按 DOM 顺序(新→旧)放进最矮的一列 → 视觉上从左往右阅读;
+   图片加载后按真实比例重排,窗口缩放自适应 */
+(function () {
+  const wrap = document.querySelector('.masonry');
+  const items = Array.from(wrap.children);
+  const GAP = 10;
+  let timer = null;
+
+  function colCount() {
+    const w = wrap.clientWidth;
+    return w < 560 ? 2 : w < 900 ? 3 : 4;
+  }
+
+  function layout() {
+    const cols = colCount();
+    const colW = Math.floor((wrap.clientWidth - GAP * (cols - 1)) / cols);
+    const heights = Array(cols).fill(0);
+    for (const it of items) {
+      it.style.width = colW + 'px';
+      const img = it.querySelector('img');
+      const ih = (img.complete && img.naturalWidth)
+        ? colW * img.naturalHeight / img.naturalWidth
+        : colW * 1.33;                       // 未加载完先按 3:4 占位
+      const cap = it.querySelector('.gmeta');
+      const h = ih + (cap ? cap.offsetHeight : 26);
+      const c = heights.indexOf(Math.min(...heights));
+      it.style.transform = `translate(${c * (colW + GAP)}px, ${heights[c]}px)`;
+      heights[c] += Math.round(h) + GAP;
+    }
+    wrap.style.height = Math.max(...heights) + 'px';
+  }
+
+  for (const it of items) {
+    it.querySelector('img').addEventListener('load', () => {
+      clearTimeout(timer);
+      timer = setTimeout(layout, 60);        // 批量加载完只重排一次
+    });
+  }
+  addEventListener('resize', () => {
+    clearTimeout(timer);
+    timer = setTimeout(layout, 80);
+  });
+  layout();
+})();
+</script>
+{% endif %}
+{% endblock %}

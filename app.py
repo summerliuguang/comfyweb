@@ -302,6 +302,24 @@ def _detail_qs():
     return urlencode({k: v for k, v in request.args.items() if v.strip()})
 
 
+@app.get("/api/gallery/image/<int:img_id>/params")
+def api_gallery_image_params(img_id):
+    """单图的完整参数(sheet 展开时按需拉取,切换图片后刷新)。"""
+    row = db.query_one(
+        "SELECT t.workflow_name, t.model, t.lora, t.prompt_text, t.seed, "
+        "t.params_json, t.created_at AS task_created "
+        "FROM images i JOIN tasks t ON t.id=i.task_id WHERE i.id=?", (img_id,))
+    if not row:
+        return err("图片不存在", 404)
+    return {"workflow_name": row["workflow_name"],
+            "model": row["model"],
+            "lora": row["lora"],
+            "prompt_text": row["prompt_text"],
+            "seed": row["seed"],
+            "created_at": row["task_created"],
+            "params": json.loads(row["params_json"] or "[]")}
+
+
 @app.get("/gallery/image/<int:img_id>")
 def page_gallery_detail(img_id):
     where, args, _cur = _gallery_filter()
@@ -342,8 +360,45 @@ def page_gallery_detail(img_id):
                "SELECT COUNT(*) AS n FROM images i JOIN tasks t ON t.id=i.task_id")
     item["pos"] = db.query_one(pos_q, pos_args)["n"] + 1
     item["total"] = db.query_one(total_q, args if where else ())["n"]
+
+    # 筛选集全量邻图(按时间序),前端做 AJAX 切换与静默预加载
+    rows = db.query(
+        f"SELECT i.id, i.filename, i.subfolder, i.type, t.workflow_id, t.workflow_name, "
+        f"t.model, t.prompt_text, t.created_at AS task_created "
+        f"FROM images i JOIN tasks t ON t.id=i.task_id {where} "
+        f"ORDER BY i.id DESC LIMIT 400",
+        args)
+    neighbors, cur_idx = [], -1
+    for r in rows:
+        if r["id"] == img_id:
+            cur_idx = len(neighbors)
+        prompt = (r["prompt_text"] or "").strip()
+        neighbors.append({
+            "id": r["id"],
+            "w": r["workflow_id"],
+            "url": image_url(r["filename"], r["subfolder"], r["type"]),
+            "thumb": image_url(r["filename"], r["subfolder"], r["type"], preview="webp;jpeg;70"),
+            "prompt": prompt[:120],
+            "wf": r["workflow_name"],
+            "m": re.sub(r"^.*[\\/]", "", r["model"] or ""),
+            "ts": r["task_created"],
+        })
+    neighbors, cur_idx = [], -1
+    for r in rows:
+        if r["id"] == img_id:
+            cur_idx = len(neighbors)
+        prompt = (r["prompt_text"] or "").strip()
+        neighbors.append({
+            "id": r["id"],
+            "url": image_url(r["filename"], r["subfolder"], r["type"]),
+            "thumb": image_url(r["filename"], r["subfolder"], r["type"], preview="webp;jpeg;70"),
+            "prompt": prompt[:120],
+            "wf": r["workflow_name"],
+            "m": re.sub(r"^.*[\\/]", "", r["model"] or ""),
+            "ts": r["task_created"],
+        })
     return render_template("gallery_detail.html", item=item, qs=_detail_qs(),
-                           active="gallery")
+                           neighbors=neighbors, idx=cur_idx, active="gallery")
 
 
 @app.get("/models")
