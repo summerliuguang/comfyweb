@@ -333,6 +333,15 @@ def page_gallery_detail(img_id):
     item["download"] = image_url(row["filename"], row["subfolder"], row["type"], dl=True)
     item["prev_id"] = prev_row["id"] if prev_row else None
     item["next_id"] = next_row["id"] if next_row else None
+    pos_q = (f"SELECT COUNT(*) AS n FROM images i JOIN tasks t ON t.id=i.task_id {where} "
+             f"AND i.id < ?" if where else
+             "SELECT COUNT(*) AS n FROM images i JOIN tasks t ON t.id=i.task_id WHERE i.id < ?")
+    pos_args = (args + [img_id]) if where else (img_id,)
+    total_q = (f"SELECT COUNT(*) AS n FROM images i JOIN tasks t ON t.id=i.task_id {where}"
+               if where else
+               "SELECT COUNT(*) AS n FROM images i JOIN tasks t ON t.id=i.task_id")
+    item["pos"] = db.query_one(pos_q, pos_args)["n"] + 1
+    item["total"] = db.query_one(total_q, args if where else ())["n"]
     return render_template("gallery_detail.html", item=item, qs=_detail_qs(),
                            active="gallery")
 
