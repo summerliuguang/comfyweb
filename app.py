@@ -606,8 +606,9 @@ def api_workflow_import_remote_save():
     except ComfyError as e:
         return err(e, 502)
     display = name[:-len(".json")] or "未命名"
-    cur = db.execute("INSERT INTO workflows(name, filename) VALUES(?, '')", (display,))
+    cur = db.execute("INSERT INTO workflows(name) VALUES(?)", (display,))
     wid = cur.lastrowid
+    db.execute("UPDATE workflows SET filename=? WHERE id=?", (f"wf_{wid}.json", wid))
     save_tpl(wid, {"version": 1, "name": display, "workflow": tpl["workflow"],
                    "params": tpl["params"], "batch_node": tpl["batch_node"]})
     return {"ok": True, "id": wid, "name": display, "warnings": warnings}
@@ -624,8 +625,9 @@ def api_workflow_create():
         return err("缺少工作流 JSON")
     if not params:
         return err("没有可用的参数定义")
-    cur = db.execute("INSERT INTO workflows(name, filename) VALUES(?, '')", (name,))
+    cur = db.execute("INSERT INTO workflows(name) VALUES(?)", (name,))
     wid = cur.lastrowid
+    db.execute("UPDATE workflows SET filename=? WHERE id=?", (f"wf_{wid}.json", wid))
     save_tpl(wid, {"version": 1, "name": name, "workflow": wf,
                    "params": params, "batch_node": data.get("batch_node")})
     return {"ok": True, "id": wid}

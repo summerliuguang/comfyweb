@@ -74,6 +74,18 @@ def init_db():
     cols = {r[1] for r in db.execute("PRAGMA table_info(workflows)")}
     if "template_json" not in cols:
         db.execute("ALTER TABLE workflows ADD COLUMN template_json TEXT")
+    # 旧表 filename 列带 UNIQUE 约束,模板入库后多行会共用空值,重建为普通列
+    row = db.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='workflows'").fetchone()
+    if row and "UNIQUE" in (row[0] or ""):
+        db.execute("ALTER TABLE workflows RENAME TO workflows_old")
+        db.executescript(SCHEMA)
+        db.execute(
+            "INSERT INTO workflows(id, name, filename, template_json, enabled, created_at) "
+            "SELECT id, name, filename, template_json, enabled, created_at FROM workflows_old")
+        db.execute("DROP TABLE workflows_old")
+    # filename 仅为迁移保留,统一按行 id 命名
+    db.execute("UPDATE workflows SET filename='wf_'||id||'.json' WHERE filename=''")
     # 同一任务的同名图片只留一条(WS 落库与轮询对账可能并发写入),再建唯一索引兜底
     db.execute(
         "DELETE FROM images WHERE id NOT IN "
