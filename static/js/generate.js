@@ -11,7 +11,11 @@
   const draftKey = wid => 'comfyweb.draft.' + wid;
 
   async function jsonFetch(path, opts) {
-    const r = await fetch(url, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts));
+    // 只允许本站 /api/ 路径,与后端 same_origin_only 呼应
+    if (typeof path !== 'string' || !path.startsWith('/api/')) {
+      throw new Error('jsonFetch 仅接受同源 /api/ 路径');
+    }
+    const r = await fetch(path, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts));
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(data.error || r.status);
     return data;
@@ -67,11 +71,14 @@
   /* 最近用过的提示词,点击回填 */
   async function loadPromptChips() {
     if (!tpl) return;
-    const pos = (tpl.params || []).find(p => p.role === 'positive');
+    const params = tpl.params || [];
+    // 与后端 build_prompt 的兜底一致:无 positive 角色时取第一个可见文本域
+    const pos = params.find(p => p.role === 'positive') ||
+                params.find(p => p.visible && p.widget === 'textarea');
     if (!pos) return;
     let d;
     try {
-      d = await api('/api/prompts?workflow_id=' + tpl.id);
+      d = await jsonFetch('/api/prompts?workflow_id=' + tpl.id);
     } catch (e) { return; }
     if (!d.prompts || !d.prompts.length) return;
     const el = [...formArea.querySelectorAll('[data-pname]')]
