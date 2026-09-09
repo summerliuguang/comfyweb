@@ -1,18 +1,20 @@
 {% extends "base.html" %}
 {% block title %}图片详情 - ComfyWeb{% endblock %}
 {% block content %}
-<div class="page-head">
-  <h1 class="title is-4">图片详情</h1>
-  <a class="button is-small" href="/gallery{% if qs %}?{{ qs }}{% endif %}">返回画廊</a>
-</div>
+<div class="viewer" id="viewer">
+  <div class="v-top">
+    <a class="vchip" href="/gallery{% if qs %}?{{ qs }}{% endif %}">‹ 画廊</a>
+    <span class="vchip v-count">{{ item.pos }}/{{ item.total }}</span>
+    <button class="vchip v-btn" id="btnBg" type="button" title="切换背景色">◐</button>
+  </div>
 
-<div class="panel">
-  <div class="detail-stage" id="stage">
+  <div class="v-stage" id="stage">
     {% if item.prev_id %}<button class="dnav prev" id="btnPrev" title="上一张(↑)">‹</button>{% endif %}
     <img id="detailImg" src="{{ item.url }}" alt="生成图片">
     {% if item.next_id %}<button class="dnav next" id="btnNext" title="下一张(↓)">›</button>{% endif %}
   </div>
-  <p class="dhint">上下滑动 / 滚轮 / ↑↓ 键切换 · 点击图片放大查看</p>
+
+  <div class="dhint" id="dhint">上下滑动 / 滚轮 / ↑↓ 键切换 · 点击图片放大 · ◐ 切换背景</div>
 
   <button class="brief-bar" id="briefBar" type="button">
     <span class="b-prompt">{{ item.prompt_text or '(无提示词)' }}</span>
@@ -58,9 +60,17 @@
 (function () {
   const qs = '{{ qs }}';
   const go = (id) => { location.href = '/gallery/image/' + id + (qs ? '?' + qs : ''); };
+  const prev = {{ item.prev_id | tojson }}, next = {{ item.next_id | tojson }};
+  const viewer = document.getElementById('viewer');
+
+  /* 背景色:黑(默认)/白,记忆选择 */
+  if (localStorage.getItem('comfyweb.viewerbg') === 'light') viewer.classList.add('light');
+  document.getElementById('btnBg').addEventListener('click', () => {
+    const light = viewer.classList.toggle('light');
+    localStorage.setItem('comfyweb.viewerbg', light ? 'light' : 'dark');
+  });
 
   /* 上/下一张:按钮、滚轮、键盘 */
-  const prev = {{ item.prev_id | tojson }}, next = {{ item.next_id | tojson }};
   document.getElementById('btnPrev')?.addEventListener('click', () => prev && go(prev));
   document.getElementById('btnNext')?.addEventListener('click', () => next && go(next));
   document.addEventListener('keydown', (e) => {
@@ -77,28 +87,36 @@
     else if (e.deltaY < 0 && prev) go(prev);
   }, { passive: true });
 
-  /* 手机:在图片区域上下滑动切换 */
+  /* 触屏上下滑动切换(touch-action:none 已禁浏览器手势,touchcancel 也计入) */
   const stage = document.getElementById('stage');
   let sy = 0, swiping = false;
-  stage.addEventListener('touchstart', (e) => {
-    if (e.touches.length === 1) { sy = e.touches[0].clientY; swiping = true; }
-  }, { passive: true });
-  stage.addEventListener('touchend', (e) => {
+  const onTouchEnd = (e) => {
     if (!swiping) return;
     swiping = false;
     const dy = e.changedTouches[0].clientY - sy;
     if (Math.abs(dy) < 48) return;
     if (dy < 0 && next) go(next);
     else if (dy > 0 && prev) go(prev);
+  };
+  stage.addEventListener('touchstart', (e) => {
+    if (e.touches.length === 1) { sy = e.touches[0].clientY; swiping = true; }
   }, { passive: true });
+  stage.addEventListener('touchend', onTouchEnd, { passive: true });
+  stage.addEventListener('touchcancel', onTouchEnd, { passive: true });
 
-  /* 点图片 → 灯箱放大 */
+  /* 点图片 → 灯箱放大(滑动后的幽灵点击要忽略) */
+  let lastSwipe = 0;
+  stage.addEventListener('touchend', () => {
+    if (swiping) return;
+    lastSwipe = Date.now();
+  }, { passive: true });
   document.getElementById('detailImg').addEventListener('click', () => {
+    if (Date.now() - lastSwipe < 500) return;
     Lightbox.open([{ url: document.getElementById('detailImg').src,
                      caption: {{ item.prompt_text | tojson }} }], 0);
   });
 
-  /* 简要信息栏 → 展开/收起详细 */
+  /* 简要信息栏 → 展开/收起详细(底部抽屉) */
   const bar = document.getElementById('briefBar'), panel = document.getElementById('infoPanel');
   bar.addEventListener('click', () => {
     panel.hidden = !panel.hidden;

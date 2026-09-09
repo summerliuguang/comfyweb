@@ -18,15 +18,23 @@
     root.hidden = true;
     root.innerHTML =
       '<button class="lb-close" type="button" aria-label="关闭">×</button>' +
+      '<button class="lb-bg" type="button" aria-label="切换背景色">◐</button>' +
       '<span class="lb-count"></span>' +
       '<div class="lb-stage"><img class="lb-img" alt=""></div>' +
       '<div class="lb-cap"></div>' +
-      '<div class="lb-hint">上下滑动切换 · 点击图片放大 · ×关闭</div>';
+      '<div class="lb-hint"></div>';
     document.body.appendChild(root);
     imgEl = root.querySelector('.lb-img');
     cntEl = root.querySelector('.lb-count');
     capEl = root.querySelector('.lb-cap');
     hintEl = root.querySelector('.lb-hint');
+    if (localStorage.getItem('comfyweb.viewerbg') === 'light') {
+      root.classList.add('lb-light');
+    }
+    root.querySelector('.lb-bg').addEventListener('click', () => {
+      const light = root.classList.toggle('lb-light');
+      localStorage.setItem('comfyweb.viewerbg', light ? 'light' : 'dark');
+    });
     bind();
   }
 
@@ -34,13 +42,19 @@
     imgEl.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
   }
 
+  function hintText() {
+    if (mode === 'focus') {
+      return '捏合/滚轮缩放 · 拖动平移 · 双击复位 · 点击图片返回';
+    }
+    const sw = imgs.length > 1 ? '上下滑动切换 · ' : '';
+    return `${sw}点击图片放大 · ◐切换背景`;
+  }
+
   function setMode(m) {
     mode = m;
     root.classList.toggle('focus', m === 'focus');
     scale = 1; tx = 0; ty = 0; apply();
-    hintEl.textContent = m === 'focus'
-      ? '捏合/滚轮缩放 · 拖动平移 · 双击复位 · 点击图片返回'
-      : '上下滑动切换 · 点击图片放大 · ×关闭';
+    hintEl.textContent = hintText();
   }
 
   function show(i) {
