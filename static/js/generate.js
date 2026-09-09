@@ -58,9 +58,44 @@
       }
       submitRow.hidden = false;
       localStorage.setItem('comfyweb.lastwf', String(tpl.id));
+      loadPromptChips();
     } catch (e) {
       formArea.innerHTML = `<p class="task-err">模板加载失败: ${esc(e.message)}</p>`;
     }
+  }
+
+  /* 最近用过的提示词,点击回填 */
+  async function loadPromptChips() {
+    if (!tpl) return;
+    const pos = (tpl.params || []).find(p => p.role === 'positive');
+    if (!pos) return;
+    let d;
+    try {
+      d = await api('/api/prompts?workflow_id=' + tpl.id);
+    } catch (e) { return; }
+    if (!d.prompts || !d.prompts.length) return;
+    const el = [...formArea.querySelectorAll('[data-pname]')]
+      .find(x => x.dataset.pname === pos.name);
+    if (!el) return;
+    const old = document.getElementById('promptChips');
+    if (old) old.remove();
+    const box = document.createElement('div');
+    box.id = 'promptChips';
+    box.style.cssText = 'display:flex;flex-wrap:wrap;gap:.35rem;align-items:center;margin:-.2rem 0 .8rem';
+    const lab = document.createElement('span');
+    lab.className = 'hint';
+    lab.textContent = '最近使用:';
+    box.appendChild(lab);
+    for (const p of d.prompts.slice(0, 5)) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'button is-small';
+      chip.textContent = p.length > 26 ? p.slice(0, 26) + '…' : p;
+      chip.title = p;
+      chip.addEventListener('click', () => { el.value = p; saveDraft(); });
+      box.appendChild(chip);
+    }
+    el.closest('.field').after(box);
   }
 
   wfSelect.addEventListener('change', () => loadTemplate(wfSelect.value));
