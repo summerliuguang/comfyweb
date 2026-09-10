@@ -89,6 +89,142 @@ def _norm_combo_str(val):
     return val
 
 
+def _index_ui_graph(uiwf):
+    """UI 工作流建索引:link_id -> (源节点id, 输出槽) 与 node_id -> 节点。"""
+    links = {}
+    for l in uiwf.get("links") or []:
+        if isinstance(l, list) and len(l) >= 4:
+            links[l[0]] = (str(l[1]), l[2])
+    nodes = {}
+    for n in uiwf.get("nodes") or []:
+        if isinstance(n, dict) and n.get("id") is not None:
+            nodes[str(n["id"])] = n
+    return links, nodes
+
+
+def _find_passthrough_input(node, out_slot):
+    """bypass/静音/Reroute 节点:找与该输出同类型、且已连线的输入。"""
+    outs = node.get("outputs") or []
+    out_type = outs[out_slot].get("type") if out_slot < len(outs) else None
+    inputs = node.get("inputs") or []
+    if node.get("type") == "Reroute":
+        for inp in inputs:
+            if inp.get("link") is not None:
+                return inp
+        return None
+    for inp in inputs:
+        if out_type and inp.get("type") == out_type and inp.get("link") is not None:
+            return inp
+    for inp in inputs:  # 容错:类型标注缺失时退化为第一个有连线的输入
+        if inp.get("link") is not None:
+            return inp
+    return None
+
+
+def _resolve_link(link_id, links, nodes, seen):
+    """把 link_id 解析为 ('node', 节点id, 槽) 或 ('value', 常量);
+    bypass/静音/Reroute 节点绕行到其输入来源。"""
+    if link_id in seen:
+        raise WorkflowParseError("工作流连线存在环,无法解析")
+    seen = seen | {link_id}
+    ref = links.get(link_id)
+    if ref is None:
+        raise WorkflowParseError(f"连线 {link_id} 找不到源头")
+    src_id, slot = ref
+    node = nodes.get(src_id)
+    if node is None:
+        raise WorkflowParseError(f"连线 {link_id} 指向不存在的节点 {src_id}")
+    cls = node.get("type")
+    mode = node.get("mode", 0)
+    title = node.get("title") or cls
+    if cls in PASSTHROUGH_TYPES or mode in (2, 4):
+        inp = _find_passthrough_input(node, slot)
+        if inp is None or inp.get("link") is None:
+            raise WorkflowParseError(
+                f"节点「{title}」被 bypass/静音,其输出找不到可直通的输入来源;"
+                f"请先在 ComfyUI 里恢复或删除该节点,或改用「导出(API)」")
+        return _resolve_link(inp["link"], links, nodes, seen)
+    if cls == "PrimitiveNode":
+        wv = node.get("widgets_values") or []
+        return ("value", wv[0] if wv else None)
+    return ("node", src_id, slot)
+
+
+def _extract_node_values(node, specs, title):
+    """从节点的 widgets_values 提取 widget 输入值,兼容按键名(新)与按顺序(旧)两种格式。
+
+    返回 (values, link_refs):values 为已类型转换的输入值;link_refs 为有连线的输入。
+    """
+    widgets = node.get("widgets_values")
+    widget_order, link_refs = [], {}
+    has_markers = any("widget" in i for i in node.get("inputs") or [])
+    for inp in node.get("inputs") or []:
+        if inp.get("link") is not None:
+            link_refs[inp["name"]] = inp["link"]
+        elif has_markers and "widget" in inp:
+            widget_order.append(inp["name"])
+    if not has_markers and not isinstance(widgets, dict):
+        # 旧版格式:inputs 只含连线,widget 顺序按 object_info
+        widget_order = list(specs.keys())
+
+    values = {}
+    if isinstance(widgets, dict):
+        # 新版部分节点(如 VHS_VideoCombine)按键名保存,逐名对位最稳
+        for name, spec in specs.items():
+            if name in widgets:
+                s0, meta = spec
+                v = widgets[name]
+                if isinstance(s0, list):
+                    v = _norm_combo_str(v)
+                casted = _cast(s0, v)
+                if casted in ("", None) and s0 in ("INT", "FLOAT"):
+                    casted = meta.get("default")
+                if casted in ("", None):
+                    continue
+                values[name] = casted
+    else:
+        widgets = list(widgets or [])
+        wi = 0
+        for name in widget_order:
+            spec = specs.get(name)
+            if spec is None:
+                # 前端专属控件(如 LoadImage 的 upload 按钮):不参与执行,
+                # 但要消耗一个位置值,保证后续参数不错位
+                wi += 1
+                continue
+            if wi >= len(widgets):
+                raise WorkflowParseError(
+                    f"节点「{title}」的参数值数量不足({name}),请用「导出(API)」")
+            s0, meta = spec
+            val = widgets[wi]
+            wi += 1
+            if meta.get("control_after_generate") and wi < len(widgets) \
+                    and isinstance(widgets[wi], str):
+                wi += 1
+            if isinstance(s0, list):
+                val = _norm_combo_str(val)
+            casted = _cast(s0, val)
+            if casted in ("", None) and s0 in ("INT", "FLOAT"):
+                casted = meta.get("default")
+            if casted in ("", None):
+                continue
+            values[name] = casted
+    return values, link_refs
+
+
+def _resolve_node_inputs(specs, link_refs, links, nodes):
+    """有连线的输入:解析为 ['源节点id', 输出槽] 或 PrimitiveNode 注入的常量。"""
+    inputs = {}
+    for name, link_id in link_refs.items():
+        kind = _resolve_link(link_id, links, nodes, set())
+        if kind[0] == "value":
+            spec = specs.get(name)
+            inputs[name] = _cast(spec[0], kind[1]) if spec else kind[1]
+        else:
+            inputs[name] = [kind[1], kind[2]]
+    return inputs
+
+
 def ui_to_api(uiwf, object_info):
     """把 ComfyUI「保存」的 UI 格式工作流转成可提交的 API 格式。
 
@@ -102,137 +238,21 @@ def ui_to_api(uiwf, object_info):
         raise WorkflowParseError(
             "该工作流包含子图(subgraph),请在 ComfyUI 里用「导出(API)」后再粘贴导入")
 
-    # link_id -> (源节点id, 输出槽)
-    links = {}
-    for l in uiwf.get("links") or []:
-        if isinstance(l, list) and len(l) >= 4:
-            links[l[0]] = (str(l[1]), l[2])
-    nodes = {}
-    for n in uiwf.get("nodes") or []:
-        if isinstance(n, dict) and n.get("id") is not None:
-            nodes[str(n["id"])] = n
-
-    def find_passthrough_input(node, out_slot):
-        """bypass/静音/Reroute 节点:找与该输出同类型、且已连线的输入。"""
-        outs = node.get("outputs") or []
-        out_type = outs[out_slot].get("type") if out_slot < len(outs) else None
-        inputs = node.get("inputs") or []
-        if node.get("type") == "Reroute":
-            for inp in inputs:
-                if inp.get("link") is not None:
-                    return inp
-            return None
-        for inp in inputs:
-            if out_type and inp.get("type") == out_type and inp.get("link") is not None:
-                return inp
-        for inp in inputs:  # 容错:类型标注缺失时退化为第一个有连线的输入
-            if inp.get("link") is not None:
-                return inp
-        return None
-
-    def resolve_link(link_id, seen):
-        """把 link_id 解析为 ('node', 节点id, 槽) 或 ('value', 常量)。"""
-        if link_id in seen:
-            raise WorkflowParseError("工作流连线存在环,无法解析")
-        seen = seen | {link_id}
-        ref = links.get(link_id)
-        if ref is None:
-            raise WorkflowParseError(f"连线 {link_id} 找不到源头")
-        src_id, slot = ref
-        node = nodes.get(src_id)
-        if node is None:
-            raise WorkflowParseError(f"连线 {link_id} 指向不存在的节点 {src_id}")
-        cls = node.get("type")
-        mode = node.get("mode", 0)
-        title = node.get("title") or cls
-        if cls in PASSTHROUGH_TYPES or mode in (2, 4):
-            inp = find_passthrough_input(node, slot)
-            if inp is None or inp.get("link") is None:
-                raise WorkflowParseError(
-                    f"节点「{title}」被 bypass/静音,其输出找不到可直通的输入来源;"
-                    f"请先在 ComfyUI 里恢复或删除该节点,或改用「导出(API)」")
-            return resolve_link(inp["link"], seen)
-        if cls == "PrimitiveNode":
-            wv = node.get("widgets_values") or []
-            return ("value", wv[0] if wv else None)
-        return ("node", src_id, slot)
-
+    links, nodes = _index_ui_graph(uiwf)
     api = {}
     for nid, node in nodes.items():
         cls = node.get("type")
         mode = node.get("mode", 0)
         title = node.get("title") or cls
         if cls in UI_SKIP_TYPES or cls in PASSTHROUGH_TYPES or mode in (2, 4):
-            continue  # 便签/重定向/bypass 不进入执行图,连线在 resolve_link 里绕行
+            continue  # 便签/重定向/bypass 不进入执行图,连线在 _resolve_link 里绕行
         info = (object_info or {}).get(cls)
         if not info:
             raise WorkflowParseError(
                 f"节点「{title}」({cls}) 在 ComfyUI 中不存在——可能缺少对应插件,或 ComfyUI 未连接")
         specs = _widget_inputs(info)
-
-        widgets = node.get("widgets_values")
-        widget_order, link_refs = [], {}
-        has_markers = any("widget" in i for i in node.get("inputs") or [])
-        for inp in node.get("inputs") or []:
-            if inp.get("link") is not None:
-                link_refs[inp["name"]] = inp["link"]
-            elif has_markers and "widget" in inp:
-                widget_order.append(inp["name"])
-        if not has_markers and not isinstance(widgets, dict):
-            # 旧版格式:inputs 只含连线,widget 顺序按 object_info
-            widget_order = list(specs.keys())
-
-        values = {}
-        if isinstance(widgets, dict):
-            # 新版部分节点(如 VHS_VideoCombine)按键名保存,逐名对位最稳
-            for name, spec in specs.items():
-                if name in widgets:
-                    s0, meta = spec
-                    v = widgets[name]
-                    if isinstance(s0, list):
-                        v = _norm_combo_str(v)
-                    casted = _cast(s0, v)
-                    if casted in ("", None) and s0 in ("INT", "FLOAT"):
-                        casted = meta.get("default")
-                    if casted in ("", None):
-                        continue
-                    values[name] = casted
-        else:
-            widgets = list(widgets or [])
-            wi = 0
-            for name in widget_order:
-                spec = specs.get(name)
-                if spec is None:
-                    # 前端专属控件(如 LoadImage 的 upload 按钮):不参与执行,
-                    # 但要消耗一个位置值,保证后续参数不错位
-                    wi += 1
-                    continue
-                if wi >= len(widgets):
-                    raise WorkflowParseError(
-                        f"节点「{title}」的参数值数量不足({name}),请用「导出(API)」")
-                s0, meta = spec
-                val = widgets[wi]
-                wi += 1
-                if meta.get("control_after_generate") and wi < len(widgets) \
-                        and isinstance(widgets[wi], str):
-                    wi += 1
-                if isinstance(s0, list):
-                    val = _norm_combo_str(val)
-                casted = _cast(s0, val)
-                if casted in ("", None) and s0 in ("INT", "FLOAT"):
-                    casted = meta.get("default")
-                if casted in ("", None):
-                    continue
-                values[name] = casted
-
-        inputs = {}
-        for name, link_id in link_refs.items():
-            kind = resolve_link(link_id, set())
-            if kind[0] == "value":
-                spec = _widget_inputs(info).get(name)
-                inputs[name] = _cast(spec[0], kind[1]) if spec else kind[1]
-            else:
-                inputs[name] = [kind[1], kind[2]]
+        values, link_refs = _extract_node_values(node, specs, title)
+        inputs = _resolve_node_inputs(specs, link_refs, links, nodes)
         inputs.update(values)
 
         spec_node = {"class_type": cls, "inputs": inputs}
@@ -254,6 +274,80 @@ def _meta_title(spec):
     return ((spec.get("_meta") or {}).get("title") or "").strip()
 
 
+def _match_param(nid, cls, name, role, object_info):
+    """已知节点/输入的表单映射。返回:
+    ("batch", None)      batch_size 由全局「生成数量」控制,不作为参数
+    ("param", kwargs)    kwargs 含控件定义;label_base 配 unique_label 用,或直接给 label
+    None                 未知输入,由调用方按 object_info 推断并归入高级区
+    """
+    if role == "positive":
+        return "param", {"label_base": "正面提示词", "widget": "textarea",
+                         "visible": True, "role": "positive"}
+    if role == "negative":
+        return "param", {"label_base": "负面提示词", "widget": "textarea",
+                         "visible": True, "role": "negative"}
+    if cls == PROMPT_CLASS and name == "text":
+        return "param", {"label_base": "提示词", "widget": "textarea", "visible": True}
+    if cls in CHECKPOINT_CLASSES and name in ("ckpt_name", "unet_name"):
+        return "param", {"label_base": "模型", "widget": "select",
+                         "dynamic": CHECKPOINT_CLASSES[cls], "visible": True}
+    if cls in VAE_CLASSES and name == "vae_name":
+        return "param", {"label_base": "VAE", "widget": "select",
+                         "dynamic": "vae", "visible": True}
+    if cls in LORA_CLASSES and name == "lora_name":
+        return "param", {"label_base": "LoRA", "widget": "select",
+                         "dynamic": "loras", "visible": True}
+    if cls in LORA_CLASSES and name.startswith("strength_"):
+        return "param", {"label": "LoRA 强度" if name == "strength_model" else "LoRA 文本强度",
+                         "widget": "float", "min": -5.0, "max": 5.0, "step": 0.05,
+                         "visible": True}
+    if cls in SAMPLER_CLASSES and name in SEED_INPUTS:
+        return "param", {"label": "随机种子", "widget": "seed", "visible": True}
+    if cls in SAMPLER_CLASSES and name == "steps":
+        return "param", {"label": "步数", "widget": "number", "min": 1, "max": 150,
+                         "step": 1, "visible": True}
+    if cls in SAMPLER_CLASSES and name == "cfg":
+        return "param", {"label": "CFG", "widget": "float", "min": 0, "max": 30,
+                         "step": 0.5, "visible": True}
+    if cls in SAMPLER_CLASSES and name == "sampler_name":
+        return "param", {"label": "采样器", "widget": "select", "visible": True,
+                         "options": _combo_from_object_info(object_info, cls, name)}
+    if cls in SAMPLER_CLASSES and name == "scheduler":
+        return "param", {"label": "调度器", "widget": "select", "visible": True,
+                         "options": _combo_from_object_info(object_info, cls, name)}
+    if cls in SAMPLER_CLASSES and name == "denoise":
+        return "param", {"label": "降噪幅度", "widget": "float", "min": 0, "max": 1,
+                         "step": 0.05, "visible": True}
+    if cls in SAMPLER_CLASSES and name in ("start_at_step", "end_at_step"):
+        return "param", {"widget": "number", "min": 0, "max": 10000, "step": 1,
+                         "label": {"start_at_step": "起始步",
+                                   "end_at_step": "结束步"}[name]}
+    if cls in SAMPLER_CLASSES and name == "add_noise":
+        return "param", {"widget": "toggle", "label": "添加噪声"}
+    if cls in LATENT_CLASSES and name == "batch_size":
+        return "batch", None
+    if cls in LATENT_CLASSES and name in ("width", "height"):
+        return "param", {"label": "宽度" if name == "width" else "高度",
+                         "widget": "number", "min": 64, "max": 8192, "step": 8,
+                         "visible": True}
+    return None
+
+
+def _detect_prompt_roles(nodes):
+    """找出接在采样器 positive/negative 输入上的 CLIPTextEncode 文本框:
+    (节点id, 'text') -> 'positive'|'negative'。"""
+    roles = {}
+    for spec in nodes.values():
+        inputs = spec.get("inputs") or {}
+        for role in ("positive", "negative"):
+            link = inputs.get(role)
+            if isinstance(link, list) and len(link) >= 2:
+                src = nodes.get(str(link[0]))
+                if src and src.get("class_type") == PROMPT_CLASS:
+                    roles[(str(link[0]), "text")] = role
+    return roles
+
+
 def parse_workflow(wf, object_info=None):
     """解析 API 格式工作流,返回模板数据(不含 name)。"""
     if not isinstance(wf, dict) or not wf:
@@ -267,24 +361,7 @@ def parse_workflow(wf, object_info=None):
              if isinstance(spec, dict) and spec.get("class_type")}
     if not nodes:
         raise WorkflowParseError("工作流里没有可识别的节点")
-
-    def input_meta(cls, name):
-        info = (object_info or {}).get(cls) or {}
-        inputs = info.get("input") or {}
-        req = inputs.get("required") or {}
-        opt = inputs.get("optional") or {}
-        return req.get(name) or opt.get(name)
-
-    # 找出接在采样器 positive/negative 输入上的 CLIPTextEncode 文本框
-    prompt_roles = {}
-    for spec in nodes.values():
-        inputs = spec.get("inputs") or {}
-        for role in ("positive", "negative"):
-            link = inputs.get(role)
-            if isinstance(link, list) and len(link) >= 2:
-                src = nodes.get(str(link[0]))
-                if src and src.get("class_type") == PROMPT_CLASS:
-                    prompt_roles[(str(link[0]), "text")] = role
+    prompt_roles = _detect_prompt_roles(nodes)
 
     used_labels = set()
 
@@ -313,61 +390,22 @@ def parse_workflow(wf, object_info=None):
         for name, value in inputs.items():
             if isinstance(value, list):
                 continue  # 节点连线,不是可编辑输入
-            key = f"{nid}:{name}"
-            role = prompt_roles.get((nid, name))
-
-            if role == "positive":
-                add(nid, name, value, label=unique_label(title or "正面提示词"),
-                    widget="textarea", visible=True, role="positive")
-            elif role == "negative":
-                add(nid, name, value, label=unique_label(title or "负面提示词"),
-                    widget="textarea", visible=True, role="negative")
-            elif cls == PROMPT_CLASS and name == "text":
-                add(nid, name, value, label=unique_label(title or "提示词"),
-                    widget="textarea", visible=True)
-            elif cls in CHECKPOINT_CLASSES and name in ("ckpt_name", "unet_name"):
-                add(nid, name, value, label=unique_label(title or "模型"), widget="select",
-                    dynamic=CHECKPOINT_CLASSES[cls], visible=True)
-            elif cls in VAE_CLASSES and name == "vae_name":
-                add(nid, name, value, label=unique_label(title or "VAE"), widget="select",
-                    dynamic="vae", visible=True)
-            elif cls in LORA_CLASSES and name == "lora_name":
-                add(nid, name, value, label=unique_label(title or "LoRA"), widget="select",
-                    dynamic="loras", visible=True)
-            elif cls in LORA_CLASSES and name.startswith("strength_"):
-                add(nid, name, value, label="LoRA 强度" if name == "strength_model" else "LoRA 文本强度",
-                    widget="float", min=-5.0, max=5.0, step=0.05, visible=True)
-            elif cls in SAMPLER_CLASSES and name in SEED_INPUTS:
-                add(nid, name, value, label="随机种子", widget="seed", visible=True)
-            elif cls in SAMPLER_CLASSES and name == "steps":
-                add(nid, name, value, label="步数", widget="number", min=1, max=150,
-                    step=1, visible=True)
-            elif cls in SAMPLER_CLASSES and name == "cfg":
-                add(nid, name, value, label="CFG", widget="float", min=0, max=30,
-                    step=0.5, visible=True)
-            elif cls in SAMPLER_CLASSES and name == "sampler_name":
-                add(nid, name, value, label="采样器", widget="select", visible=True,
-                    options=_combo_from_object_info(object_info, cls, name))
-            elif cls in SAMPLER_CLASSES and name == "scheduler":
-                add(nid, name, value, label="调度器", widget="select", visible=True,
-                    options=_combo_from_object_info(object_info, cls, name))
-            elif cls in SAMPLER_CLASSES and name == "denoise":
-                add(nid, name, value, label="降噪幅度", widget="float", min=0, max=1,
-                    step=0.05, visible=True)
-            elif cls in SAMPLER_CLASSES and name in ("start_at_step", "end_at_step"):
-                add(nid, name, value, widget="number", min=0, max=10000, step=1,
-                    label={"start_at_step": "起始步", "end_at_step": "结束步"}[name])
-            elif cls in SAMPLER_CLASSES and name == "add_noise":
-                add(nid, name, value, widget="toggle", label="添加噪声")
-            elif cls in LATENT_CLASSES and name == "batch_size":
-                batch_node = nid  # 数量由全局「生成数量」控制,不作为参数
-            elif cls in LATENT_CLASSES and name in ("width", "height"):
-                add(nid, name, value, label="宽度" if name == "width" else "高度",
-                    widget="number", min=64, max=8192, step=8, visible=True)
-            else:
+            matched = _match_param(nid, cls, name, prompt_roles.get((nid, name)),
+                                   object_info)
+            if matched is None:
                 # 未知输入:按 object_info 类型推断,归入高级区默认隐藏
-                add(nid, name, value, label=unique_label(title or f"节点 {nid}"),
-                    **_infer_widget(cls, name, value, input_meta))
+                add(nid, name, value,
+                    label=unique_label(title or f"节点 {nid}"),
+                    **_infer_widget(cls, name, value,
+                                    lambda c, n: _raw_meta(object_info, c, n)))
+                continue
+            kind, kw = matched
+            if kind == "batch":
+                batch_node = nid  # 数量由全局「生成数量」控制,不作为参数
+                continue
+            if "label_base" in kw:
+                kw["label"] = unique_label(title or kw.pop("label_base"))
+            add(nid, name, value, **kw)
 
     sort_params(params)
     return {"workflow": wf, "params": params, "batch_node": batch_node,
