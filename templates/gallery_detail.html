@@ -14,7 +14,7 @@
     <button class="dnav next" id="btnNext" title="下一张(↓)">›</button>
   </div>
 
-  <div class="dhint" id="dhint">上下滑动切换 · 双指捏合缩放(松手小于原大自动回弹) · ◐ 切换背景</div>
+  <div class="dhint" id="dhint">上下滑动切换 · 双指捏合缩放(小于原大自动回弹) · 信息栏上拉展开/下拉收起 · ◐ 切换背景</div>
 
   <div class="v-toast" id="vToast"></div>
 
@@ -60,13 +60,29 @@
     toastTimer = setTimeout(() => toastEl.classList.remove('show'), 1400);
   }
 
-  /* 静默预加载当前图前后各 10 张(原图),切换零等待 */
+  /* 预加载当前图前后各 5 张:按距离近→远串行加载。
+     服务端原图实时回源 ComfyUI(不落盘缓存),一次性并发会占满浏览器连接池,
+     切换那张反而排在队尾——串行化保证切换永远有空闲连接,且相邻图大概率已就绪 */
   const preloaded = new Set();
+  let preloadSeq = 0;
   function preload() {
-    for (let i = Math.max(0, cur - 10); i <= Math.min(NEIGHBORS.length - 1, cur + 10); i++) {
-      const u = NEIGHBORS[i].url;
-      if (!preloaded.has(u)) { preloaded.add(u); new Image().src = u; }
-    }
+    const seq = ++preloadSeq, center = cur;
+    (async () => {
+      for (let d = 1; d <= 5; d++) {
+        for (const i of [center - d, center + d]) {
+          if (seq !== preloadSeq) return;    // 已切走:按新位置重来
+          if (i < 0 || i >= NEIGHBORS.length) continue;
+          const u = NEIGHBORS[i].url;
+          if (preloaded.has(u)) continue;
+          preloaded.add(u);
+          await new Promise((res) => {
+            const im = new Image();
+            im.onload = im.onerror = res;
+            im.src = u;
+          });
+        }
+      }
+    })();
   }
 
   function esc(s) {
@@ -254,15 +270,31 @@
     if (sheet.classList.contains('open')) setSheet(false);
   });
 
-  /* 底部 sheet:收起=两行摘要(顶部圆角),展开=完整参数抽屉,点头部开合 */
+  /* 底部 sheet:收起=两行摘要(顶部圆角),展开=完整参数抽屉。
+     开合途径:点头部、头部上拉展开/下拉收起(触摸);拖过阈值后吞掉跟随点击 */
+  const sheetHead = document.getElementById('sheetHead');
   function setSheet(open) {
     sheet.classList.toggle('open', open);
     sheetBody.hidden = !open;
     document.getElementById('briefChev').textContent = open ? '收起 ▴' : '详情 ▾';
     if (open) renderSheetBody(NEIGHBORS[cur]);
   }
-  document.getElementById('sheetHead').addEventListener('click', () =>
-    setSheet(!sheet.classList.contains('open')));
+  let sheetSwipe = false, ssy = 0;
+  sheetHead.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse') return;
+    ssy = e.clientY;
+  });
+  sheetHead.addEventListener('pointerup', (e) => {
+    if (e.pointerType === 'mouse') return;
+    const dy = e.clientY - ssy;
+    if (Math.abs(dy) < 48) return;
+    sheetSwipe = true; setTimeout(() => { sheetSwipe = false; }, 500);
+    setSheet(dy < 0);
+  });
+  sheetHead.addEventListener('click', () => {
+    if (sheetSwipe) return;
+    setSheet(!sheet.classList.contains('open'));
+  });
 
   syncArrows();
   preload();
