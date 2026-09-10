@@ -48,6 +48,7 @@
       else if ([...real.options || []].some(o => o.value === String(v))) real.value = v;
       else if (!real.options) real.value = v == null ? '' : v;
     }
+    formArea.querySelectorAll('textarea').forEach(t => comfyAutosizeFit(t));
   }
 
   async function loadTemplate() {
@@ -192,6 +193,7 @@
       }
     }
     saveDraft();
+    formArea.querySelectorAll('textarea').forEach(t => comfyAutosizeFit(t));
     formArea.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 

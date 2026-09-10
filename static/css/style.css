@@ -17,6 +17,11 @@
 .seed-row{display:flex;gap:.6rem;align-items:center}
 .seed-row .input{flex:1}
 
+/* 文本域随内容增高(base.html comfyAutosize 接管高度),不出内部滚动条 */
+textarea.textarea{overflow:hidden;resize:none;display:block}
+/* JSON 导入框例外:过长时限高,超出部分框内滚动,不把页面无限撑长 */
+#wfText{max-height:60vh;overflow-y:auto}
+
 /* 高级参数折叠 */
 details.adv>summary{cursor:pointer;font-size:.85rem;font-weight:600;color:var(--muted);padding:.4rem 0;list-style:none}
 details.adv>summary::before{content:'▸ ';transition:transform .18s ease;display:inline-block}

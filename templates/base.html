@@ -47,6 +47,28 @@ document.addEventListener('error', function (e) {
       '<text x="48" y="50" font-size="11" text-anchor="middle" fill="#8a90a0">图片缺失</text></svg>');
   }
 }, true);
+
+/* 文本域随内容增高(提示词等),不用内部滚动条。
+   程序化回填值后(generate.js 的草稿/再次生成)手动调 comfyAutosizeFit 重算 */
+function comfyAutosizeFit(t) {
+  t.style.height = 'auto';
+  t.style.height = (t.scrollHeight + t.offsetHeight - t.clientHeight) + 'px';
+}
+function comfyAutosize(t) {
+  if (t.dataset.autosize) { comfyAutosizeFit(t); return; }
+  t.dataset.autosize = '1';
+  t.addEventListener('input', function () { comfyAutosizeFit(t); });
+  comfyAutosizeFit(t);
+}
+window.comfyAutosizeFit = comfyAutosizeFit;
+document.querySelectorAll('textarea').forEach(comfyAutosize);
+new MutationObserver(function (muts) {
+  for (const m of muts) for (const n of m.addedNodes) {
+    if (n.nodeType !== 1) continue;
+    if (n.tagName === 'TEXTAREA') comfyAutosize(n);
+    else if (n.querySelectorAll) n.querySelectorAll('textarea').forEach(comfyAutosize);
+  }
+}).observe(document.body, { childList: true, subtree: true });
 {% block bodyscript %}{% endblock %}
 </script>
 {% block scripts %}{% endblock %}
