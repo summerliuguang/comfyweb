@@ -14,6 +14,10 @@ html{background:var(--bg)}
 /* 按钮/输入:明显圆角+统一过渡 */
 .button,.input,.select select,.textarea{border-radius:12px;
   transition:background-color .18s ease,border-color .18s ease,color .18s ease}
+/* Bulma .button.is-small:not(.is-rounded) 自带 2px 圆角(:not 提高特异性),
+   小号控件统一 9px,须用同样特异性的选择器覆盖 */
+.button.is-small:not(.is-rounded),.input.is-small,.select.is-small select,
+.textarea.is-small{border-radius:9px}
 .button{border-color:var(--line)}
 .button.is-link{background:var(--primary);border-color:transparent}
 .button.is-link:hover{background:#2f66d9}
