@@ -4,6 +4,7 @@
 - API Token 可选(civitai_token),部分下载与更高速率限制需要。
 - 搜索/详情响应做进程内 TTL 缓存。
 """
+import json
 import re
 import time
 from html.parser import HTMLParser
@@ -29,6 +30,9 @@ def cached(key, ttl, fn):
         hit = _cache.get(key)
         if hit and now - hit[0] < ttl:
             return hit[1]
+        if len(_cache) > 100:  # 防长驻进程无界增长:挤掉最旧的过期项
+            for k in sorted(_cache, key=lambda k: _cache[k][0])[: len(_cache) - 100]:
+                _cache.pop(k, None)
     val = fn()
     with _cache_lock:
         _cache[key] = (now, val)
@@ -79,7 +83,8 @@ def _api_url(path):
     return BASE + path
 
 
-def get_json(path, params=None, timeout=25):
+def get_json(path, params=None, timeout=40):
+    """经代理拉 Civitai 偶发慢(实测 1~25s 波动),超时给足;失败由调用方优雅降级。"""
     try:
         r = _session().get(_api_url(path), params=params, timeout=timeout)
     except requests.RequestException as e:
@@ -112,7 +117,7 @@ def fetch_image(url):
 
 
 def search(q=None, types=("Checkpoint",), base=None, sort="Most Downloaded",
-           cursor=None, nsfw=False):
+           cursor=None, nsfw=False, force=False):
     """cursor 分页:首页 cursor=None,后续传上一页响应的 nextCursor。
 
     实测 Civitai 的 /models 对部分排序(如 Most Downloaded)忽略 page 参数,
@@ -127,9 +132,88 @@ def search(q=None, types=("Checkpoint",), base=None, sort="Most Downloaded",
     if base:
         params["baseModels"] = base
     key = "civsearch:" + repr(sorted(params.items()))
-    data = cached(key, 300, lambda: get_json("/models", params))
+    if force:
+        data = get_json("/models", params)
+    else:
+        data = cached(key, 300, lambda: get_json("/models", params))
     items = [_card(it) for it in data.get("items") or [] if nsfw or not it.get("nsfw")]
     return {"items": items, "nextCursor": (data.get("metadata") or {}).get("nextCursor")}
+
+
+# ---------- 本地库(SQLite):拉取过的搜索页与模型数据落库,加载直接读本地 ----------
+
+def _search_key(q, types, base, sort, cursor, nsfw):
+    return "|".join([",".join(types), q or "", base or "", sort,
+                     cursor or "", "nsfw" if nsfw else "sfw"])
+
+
+def _store_cards(items, ctype):
+    now = time.time()
+    for card in items:
+        db.execute(
+            "INSERT INTO civ_models(civ_id,type,card_json,fetched_at) VALUES(?,?,?,?) "
+            "ON CONFLICT(civ_id) DO UPDATE SET card_json=excluded.card_json,"
+            "type=excluded.type,fetched_at=excluded.fetched_at",
+            (card["id"], ctype, json.dumps(card, ensure_ascii=False), now))
+
+
+def search_local(q=None, types=("Checkpoint",), base=None, sort="Most Downloaded",
+                 cursor=None, nsfw=False, refresh=False):
+    """本地库优先:命中搜索页直接回本地卡片;未命中(或 refresh)拉 Civitai 并入库。"""
+    ctype = ",".join(types)
+    key = _search_key(q, types, base, sort, cursor, nsfw)
+    if not refresh:
+        page = db.query_one("SELECT ids, next_cursor FROM civ_searches WHERE key=?", (key,))
+        if page:
+            return {"items": _cards_by_ids(json.loads(page["ids"])),
+                    "nextCursor": page["next_cursor"], "cached": True}
+    res = search(q=q, types=types, base=base, sort=sort, cursor=cursor,
+                 nsfw=nsfw, force=refresh)
+    _store_cards(res["items"], ctype)
+    db.execute(
+        "INSERT INTO civ_searches(key,ids,next_cursor,fetched_at) VALUES(?,?,?,?) "
+        "ON CONFLICT(key) DO UPDATE SET ids=excluded.ids,"
+        "next_cursor=excluded.next_cursor,fetched_at=excluded.fetched_at",
+        (key, json.dumps([c["id"] for c in res["items"]]),
+         res.get("nextCursor") or "", time.time()))
+    res["cached"] = False
+    return res
+
+
+def _cards_by_ids(ids):
+    if not ids:
+        return []
+    marks = ",".join("?" * len(ids))
+    rows = db.query(f"SELECT civ_id, card_json FROM civ_models WHERE civ_id IN ({marks})",
+                    [int(i) for i in ids])
+    by_id = {r["civ_id"]: r["card_json"] for r in rows}
+    return [json.loads(by_id[i]) for i in ids if i in by_id]
+
+
+def get_model_local(model_id, refresh=False):
+    """详情本地库优先:看过一次即落库(含描述/用法/版本);没有或 refresh 才在线拉。"""
+    model_id = int(model_id)
+    row = db.query_one("SELECT detail_json FROM civ_models WHERE civ_id=?", (model_id,))
+    if not refresh and row and row["detail_json"]:
+        return json.loads(row["detail_json"])
+    d = get_model(model_id, force=refresh)
+    db.execute(
+        "INSERT INTO civ_models(civ_id,type,card_json,detail_json,fetched_at) "
+        "VALUES(?,?,?,?,?) ON CONFLICT(civ_id) DO UPDATE SET "
+        "detail_json=excluded.detail_json,fetched_at=excluded.fetched_at",
+        (model_id, d.get("type") or "",
+         row["card_json"] if row else json.dumps(_card_from_detail(d), ensure_ascii=False),
+         json.dumps(d, ensure_ascii=False), time.time()))
+    return d
+
+
+def _card_from_detail(d):
+    """只看过详情、没出现在搜索里的模型,补一张最简卡片。"""
+    v = (d.get("versions") or [{}])[0]
+    return {"id": d.get("id"), "name": d.get("name"), "type": d.get("type"),
+            "creator": d.get("creator"), "base": v.get("baseModel"),
+            "cover": v.get("cover") or "", "downloads": d.get("downloads") or 0,
+            "likes": d.get("likes") or 0}
 
 
 def match_by_filename(stem, ctype):
@@ -168,9 +252,12 @@ def match_by_filename(stem, ctype):
     return best
 
 
-def get_model(model_id):
-    data = cached("civmodel:" + str(model_id), 600,
-                  lambda: get_json(f"/models/{int(model_id)}"))
+def get_model(model_id, force=False):
+    if force:
+        data = get_json(f"/models/{int(model_id)}")
+    else:
+        data = cached("civmodel:" + str(model_id), 600,
+                      lambda: get_json(f"/models/{int(model_id)}"))
     return {
         "id": data.get("id"),
         "name": data.get("name"),

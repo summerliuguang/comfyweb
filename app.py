@@ -451,11 +451,12 @@ def api_civitai_search():
     if ctype not in CIVITAI_TYPES:
         return err("无效的类型")
     try:
-        return jsonify(civitai.search(
+        return jsonify(civitai.search_local(
             q=q or None, types=(ctype,), base=request.args.get("base") or None,
             sort=request.args.get("sort") or "Most Downloaded",
             cursor=request.args.get("cursor") or None,
-            nsfw=db.get_setting("civitai_nsfw") == "1"))
+            nsfw=db.get_setting("civitai_nsfw") == "1",
+            refresh=request.args.get("refresh") == "1"))
     except civitai.CivitaiError as e:
         return err(e, 502)
 
@@ -463,7 +464,8 @@ def api_civitai_search():
 @app.get("/api/civitai/model/<int:mid>")
 def api_civitai_model(mid):
     try:
-        return jsonify(civitai.get_model(mid))
+        return jsonify(civitai.get_model_local(
+            mid, refresh=request.args.get("refresh") == "1"))
     except civitai.CivitaiError as e:
         return err(e, 502)
 

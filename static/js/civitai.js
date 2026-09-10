@@ -114,13 +114,14 @@
     }, 5000);
   }
 
-  /* ---------- 搜索(全部走 cursor 分页) ---------- */
-  async function doSearch(reset) {
+  /* ---------- 搜索(全部走 cursor 分页;本地库优先,refresh 强制在线更新) ---------- */
+  async function doSearch(reset, refresh) {
     const errBox = $('listError');
     errBox.hidden = true;
     $('grid').innerHTML = '<p class="empty">加载中…</p>';
     $('emptyHint').hidden = true;
     $('pager').hidden = true;
+    $('srcHint').hidden = true;
     if (reset) {
       lastQ = $('q').value.trim();
       lastSort = $('sort').value;
@@ -132,11 +133,17 @@
     if (lastQ) qs.set('q', lastQ);
     if (lastBase) qs.set('base', lastBase);
     if (cursorFor[pageNo]) qs.set('cursor', cursorFor[pageNo]);
+    if (refresh) qs.set('refresh', '1');
     try {
       const d = await api('/api/civitai/search?' + qs);
       hasNext = !!d.nextCursor;
       if (d.nextCursor) cursorFor[pageNo + 1] = d.nextCursor;
       renderGrid(d);
+      const hint = $('srcHint');
+      hint.textContent = d.cached
+        ? `已从本地库加载(${d.items.length} 项),点「刷新」从 Civitai 更新`
+        : '已从 Civitai 拉取并入库,下次秒开';
+      hint.hidden = false;
     } catch (e) {
       $('grid').innerHTML = '';
       errBox.textContent = e.message;
@@ -336,6 +343,15 @@
 
   /* ---------- 事件 ---------- */
   $('searchForm').addEventListener('submit', e => { e.preventDefault(); doSearch(true); });
+  $('btnRef').addEventListener('click', async () => {
+    const b = $('btnRef');
+    b.classList.add('is-loading');
+    b.disabled = true;
+    try { await doSearch(false, true); } finally {
+      b.classList.remove('is-loading');
+      b.disabled = false;
+    }
+  });
   $('sort').addEventListener('change', () => doSearch(true));
   $('base').addEventListener('change', () => doSearch(true));
   $('prevPage').addEventListener('click', () => { if (pageNo > 1) { pageNo--; doSearch(false); } });

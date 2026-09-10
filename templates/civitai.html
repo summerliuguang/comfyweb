@@ -17,6 +17,7 @@
     <div style="display:flex;gap:.5rem">
       <input class="input" id="q" type="search" placeholder="搜索 {{ title }} 名称/关键词">
       <button class="button is-link" type="submit">搜索</button>
+      <button class="button" id="btnRef" type="button" title="忽略本地缓存,重新从 Civitai 拉取当前结果">刷新</button>
     </div>
     <div style="display:flex;gap:.5rem;flex-wrap:wrap">
       <div class="select is-small" style="flex:1;min-width:8rem">
@@ -43,6 +44,7 @@
     </div>
   </form>
   <p class="task-err" id="listError" hidden></p>
+  <p class="hint" id="srcHint" hidden style="margin-top:.6rem"></p>
   <div id="grid" class="civ-grid" style="margin-top:.8rem"></div>
   <p class="empty" id="emptyHint" hidden>没有结果,换个关键词试试</p>
   <div class="pager" id="pager" hidden>
