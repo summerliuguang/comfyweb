@@ -84,11 +84,19 @@ def _api_url(path):
 
 
 def get_json(path, params=None, timeout=40):
-    """经代理拉 Civitai 偶发慢(实测 1~25s 波动),超时给足;失败由调用方优雅降级。"""
-    try:
-        r = _session().get(_api_url(path), params=params, timeout=timeout)
-    except requests.RequestException as e:
-        raise CivitaiError(f"访问 Civitai 失败: {e.__class__.__name__},请检查设置页的代理配置") from e
+    """经代理拉 Civitai 偶发慢(实测 1~40s 波动,多为陈旧连接停顿):
+    失败后重建会话(丢掉旧连接)自动重试一次,仍失败才报错。"""
+    r, last = None, None
+    for _ in range(2):
+        try:
+            r = _session().get(_api_url(path), params=params, timeout=timeout)
+            break
+        except requests.RequestException as e:
+            last = e
+            reset_session()
+    else:
+        raise CivitaiError(
+            f"访问 Civitai 失败: {last.__class__.__name__},请检查设置页的代理配置") from last
     if r.status_code != 200:
         raise CivitaiError(f"Civitai 返回 {r.status_code}")
     return r.json()
@@ -193,7 +201,8 @@ def _cards_by_ids(ids):
 def get_model_local(model_id, refresh=False):
     """详情本地库优先:看过一次即落库(含描述/用法/版本);没有或 refresh 才在线拉。"""
     model_id = int(model_id)
-    row = db.query_one("SELECT detail_json FROM civ_models WHERE civ_id=?", (model_id,))
+    row = db.query_one("SELECT card_json, detail_json FROM civ_models WHERE civ_id=?",
+                       (model_id,))
     if not refresh and row and row["detail_json"]:
         return json.loads(row["detail_json"])
     d = get_model(model_id, force=refresh)
