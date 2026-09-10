@@ -1,6 +1,6 @@
 /* ComfyWeb 页面布局与组件(配色变量见 skin.css) */
 .wrap{max-width:960px;margin-left:236px;padding:1.2rem 1rem 3rem}
-@media(max-width:899px){.wrap{margin-left:0}}
+@media(max-width:899px){.wrap{margin-left:0;padding-top:4rem}}
 
 .page-head{display:flex;align-items:center;justify-content:space-between;gap:.6rem;margin-bottom:1rem;flex-wrap:wrap}
 .page-head .title{margin:0}

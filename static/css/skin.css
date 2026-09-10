@@ -82,3 +82,43 @@ textarea:focus-visible,summary:focus-visible,[tabindex]:focus-visible{
 :root[data-theme="dark"] .checkbox{color:var(--text)}
 
 @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+/* ===== 手机顶栏 + 左滑抽屉(2026-09 LiteGate 模式) ===== */
+.topbar{display:none;position:fixed;top:0;left:0;right:0;z-index:60;height:3rem;
+  align-items:center;justify-content:space-between;padding:0 .55rem;
+  background:var(--card,#fff);border-bottom:1px solid var(--line,#e8eaf0);
+  box-shadow:0 2px 8px rgba(30,35,60,.06)}
+.topbar-left{display:flex;align-items:center;gap:.5rem}
+.topbar-brand{font-weight:700;font-size:1rem;color:var(--text,#1f2430);letter-spacing:.02em}
+.topbar-title{font-weight:600;font-size:.95rem;color:var(--text,#1f2430)}
+.topbar-icon{display:flex;align-items:center;border:none;background:none;cursor:pointer;
+  color:#3e7bfa;padding:.4rem;border-radius:9px}
+.topbar-icon:hover{background:var(--primary-weak,#eef3ff)}
+.topbar .theme-quick{border:none;background:none;cursor:pointer;font-size:1.05rem;
+  padding:.3rem .45rem;border-radius:9px;color:var(--text,#1f2430)}
+.mnav-backdrop{display:none;position:fixed;inset:0;z-index:70;background:rgba(24,28,45,.42);
+  opacity:0;pointer-events:none;transition:opacity .22s ease}
+.mnav-drawer{display:none;position:fixed;top:0;bottom:0;left:0;z-index:80;width:min(76%,290px);
+  background:var(--card,#fff);border-radius:0 16px 16px 0;overflow-y:auto;
+  box-shadow:8px 0 28px rgba(25,30,55,.18);padding:.9rem .8rem 1.2rem;
+  transform:translateX(-102%);transition:transform .24s ease}
+.mnav-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem}
+.mnav-logo{font-weight:700;font-size:1.02rem;color:var(--text,#1f2430);letter-spacing:.02em}
+.mnav-close{border:none;background:none;cursor:pointer;color:#8a90a0;padding:.2rem .45rem;font-size:1.45rem;line-height:1}
+.mnav-drawer .menu-list a{border-radius:12px;padding:.65rem .9rem;font-size:.88rem}
+.mnav-drawer .menu-list a:hover{background:var(--primary-weak,#eef3ff)}
+.mnav-drawer .menu-list a.on{background:var(--primary-weak,#eef3ff);color:var(--primary,#3e7bfa);font-weight:600}
+.theme-seg{display:flex;gap:.3rem}
+.theme-seg button{flex:1;border:1px solid var(--line,#e8eaf0);background:var(--card,#fff);
+  color:var(--text,#1f2430);border-radius:9px;padding:.35rem 0;font-size:.78rem;cursor:pointer;
+  transition:background-color .18s ease,color .18s ease}
+.theme-seg button.on{background:var(--primary,#3e7bfa);border-color:var(--primary,#3e7bfa);color:#fff}
+@media(max-width:899px){
+  .topbar{display:flex}
+  .mnav-backdrop{display:block}
+  .mnav-drawer{display:block}
+  .side{display:none}
+  body.mnav-open{overflow:hidden}
+  body.mnav-open .mnav-backdrop{opacity:1;pointer-events:auto}
+  body.mnav-open .mnav-drawer{transform:none}
+}
