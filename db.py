@@ -63,6 +63,20 @@ CREATE TABLE IF NOT EXISTS model_meta(
   updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
   PRIMARY KEY(folder, filename)
 );
+-- Civitai 本地库:拉取过的搜索页与模型卡片/详情落库,页面加载直接读本地
+CREATE TABLE IF NOT EXISTS civ_models(
+  civ_id INTEGER PRIMARY KEY,
+  type TEXT NOT NULL DEFAULT '',
+  card_json TEXT NOT NULL DEFAULT '{}',
+  detail_json TEXT,
+  fetched_at REAL NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS civ_searches(
+  key TEXT PRIMARY KEY,
+  ids TEXT NOT NULL DEFAULT '[]',
+  next_cursor TEXT NOT NULL DEFAULT '',
+  fetched_at REAL NOT NULL DEFAULT 0
+);
 CREATE INDEX IF NOT EXISTS idx_images_task ON images(task_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at);
 """
