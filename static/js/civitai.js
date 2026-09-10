@@ -192,16 +192,19 @@
   }
 
   /* ---------- 详情弹层 ---------- */
-  async function showDetail(id, cover) {
+  async function showDetail(id, cover, refresh) {
     const box = $('detailBox');
-    box.innerHTML = '<p class="empty">加载中…</p>';
-    $('detailOverlay').hidden = false;
-    $('detailOverlay').scrollTop = 0;
+    if (!refresh) {  // 刷新失败时保留已打开的详情,只在首次打开时才整页替换
+      box.innerHTML = '<p class="empty">加载中…</p>';
+      $('detailOverlay').hidden = false;
+      $('detailOverlay').scrollTop = 0;
+    }
     try {
-      const m = await api('/api/civitai/model/' + id);
+      const m = await api('/api/civitai/model/' + id + (refresh ? '?refresh=1' : ''));
       renderDetail(m, cover);
     } catch (e) {
-      box.innerHTML = `<p class="task-err">${e.message}</p>`;
+      if (refresh) alert('从 Civitai 更新失败: ' + e.message);
+      else box.innerHTML = `<p class="task-err">${e.message}</p>`;
     }
   }
 
@@ -215,11 +218,23 @@
     h.style.margin = '0';
     h.textContent = m.name;
     head.appendChild(h);
+    const btns = document.createElement('div');
+    btns.style.cssText = 'display:flex;gap:.4rem;flex:none';
+    const upd = document.createElement('button');
+    upd.className = 'button is-small is-light';
+    upd.textContent = '从 Civitai 更新';
+    upd.addEventListener('click', async () => {
+      upd.disabled = true;
+      upd.classList.add('is-loading');
+      try { await showDetail(m.id, cover, true); } finally { upd.disabled = false; }
+    });
+    btns.appendChild(upd);
     const close = document.createElement('button');
     close.className = 'button is-small';
     close.textContent = '关闭';
     close.addEventListener('click', hideDetail);
-    head.appendChild(close);
+    btns.appendChild(close);
+    head.appendChild(btns);
     box.appendChild(head);
 
     const sub = document.createElement('p');
