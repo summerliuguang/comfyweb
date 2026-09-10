@@ -22,6 +22,22 @@ textarea.textarea{overflow:hidden;resize:none;display:block}
 /* JSON 导入框例外:过长时限高,超出部分框内滚动,不把页面无限撑长 */
 #wfText{max-height:60vh;overflow-y:auto}
 
+/* 提示词框:AI 润色/翻译行 + Danbooru tag 联想下拉 */
+.prompt-control{position:relative}
+.ai-row{display:flex;gap:.45rem;margin-top:.45rem;align-items:center;flex-wrap:wrap}
+.ai-row .ai-style{flex:none;margin:0}
+.ai-row .ai-style select{font-size:.78rem;border-radius:9px}
+.ai-row .ai-model{flex:none;margin:0;max-width:11rem}
+.ai-row .ai-model select{font-size:.78rem;border-radius:9px}
+.ai-row .button{font-size:.78rem;border-radius:9px}
+.tag-dd{position:absolute;left:0;right:0;top:100%;z-index:30;margin-top:.2rem;
+  background:var(--card);border:1px solid var(--line);border-radius:10px;
+  box-shadow:0 4px 14px rgba(20,26,45,.14);max-height:15rem;overflow-y:auto}
+.tag-dd-item{display:flex;justify-content:space-between;align-items:baseline;gap:.8rem;
+  padding:.42rem .7rem;font-size:.82rem;cursor:pointer}
+.tag-dd-item:hover,.tag-dd-item.on{background:var(--primary-weak)}
+.tag-dd-item .meta{font-size:.7rem;color:var(--muted);flex:none}
+
 /* 高级参数折叠 */
 details.adv>summary{cursor:pointer;font-size:.85rem;font-weight:600;color:var(--muted);padding:.4rem 0;list-style:none}
 details.adv>summary::before{content:'▸ ';transition:transform .18s ease;display:inline-block}

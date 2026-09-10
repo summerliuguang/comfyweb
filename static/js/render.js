@@ -97,7 +97,9 @@ function renderForm(container, tpl) {
     }
     const c = widgetControl(p);
     c.dataset.pname = p.name;
-    container.appendChild(fieldWrap(p.label, c));
+    const f = fieldWrap(p.label, c);
+    if (p.widget === 'textarea') enhancePromptField(f, p);
+    container.appendChild(f);
   }
   if (advVisible.length) {
     const det = document.createElement('details');
@@ -109,7 +111,9 @@ function renderForm(container, tpl) {
     for (const p of advVisible) {
       const c = widgetControl(p);
       c.dataset.pname = p.name;
-      box.appendChild(fieldWrap(p.label, c));
+      const f = fieldWrap(p.label, c);
+      if (p.widget === 'textarea') enhancePromptField(f, p);
+      box.appendChild(f);
     }
     det.appendChild(box);
     container.appendChild(det);
@@ -227,4 +231,187 @@ function statusDot(status) {
   s.className = 'status dot-' + status;
   s.textContent = STATUS_TEXT[status] || status;
   return s;
+}
+
+/* ===== 提示词框增强(生成页):Danbooru tag 联想 + AI 润色/翻译 ===== */
+
+const AI_STYLES = [['enhance', '通用增强'], ['detail', '细节丰富'], ['anime', '动漫风'],
+  ['photo', '写实摄影'], ['concise', '精简']];
+
+/* 模型列表每页只拉一次;失败不缓存,下次再试 */
+let _aiModelsCache = null;
+function _aiModels() {
+  if (!_aiModelsCache) {
+    _aiModelsCache = fetch('/api/ai/models').then(r => r.json()).catch(() => {
+      _aiModelsCache = null;
+      return {};
+    });
+  }
+  return _aiModelsCache;
+}
+
+/* 光标所在的当前 tag(逗号/换行分隔的一段) */
+function _currentToken(t) {
+  const pos = t.selectionStart == null ? t.value.length : t.selectionStart;
+  const before = t.value.slice(0, pos);
+  const m = before.match(/[^,\n]*$/);
+  return { start: pos - m[0].length, end: pos, text: m[0] };
+}
+
+function _attachTagComplete(control, t) {
+  const dd = document.createElement('div');
+  dd.className = 'tag-dd';
+  dd.hidden = true;
+  control.appendChild(dd);
+  let items = [], active = -1, tmr = 0, fetchSeq = 0;
+  const close = () => { dd.hidden = true; items = []; active = -1; };
+  const render = () => {
+    dd.innerHTML = '';
+    items.forEach((it, i) => {
+      const d = document.createElement('div');
+      d.className = 'tag-dd-item' + (i === active ? ' on' : '');
+      const nm = document.createElement('span');
+      nm.textContent = it.name;
+      const meta = document.createElement('span');
+      meta.className = 'meta';
+      meta.textContent = (it.cat ? it.cat + ' · ' : '') +
+        (it.count >= 10000 ? Math.round(it.count / 10000) + '万' : it.count);
+      d.append(nm, meta);
+      d.addEventListener('pointerdown', (e) => { e.preventDefault(); accept(i); });
+      dd.appendChild(d);
+    });
+    dd.hidden = !items.length;
+  };
+  const accept = (i) => {
+    const it = items[i];
+    if (!it) return;
+    const tok = _currentToken(t);
+    const after = t.value.slice(tok.end);
+    const afterTrim = after.trim();
+    // 结尾补逗号;后面已有内容且没逗号隔开时也补一个
+    const insert = it.name + (afterTrim && !afterTrim.startsWith(',') ? ',' :
+                              afterTrim ? '' : ', ');
+    t.value = t.value.slice(0, tok.start) + insert + after;
+    t.selectionStart = t.selectionEnd = tok.start + insert.length;  // 落在补的逗号后,继续输入即新 tag
+    close();
+    t.dispatchEvent(new Event('input', { bubbles: true }));
+    t.focus();
+  };
+  t.addEventListener('input', () => {
+    clearTimeout(tmr);
+    const q = _currentToken(t).text.trim().toLowerCase();
+    if (!q) { close(); return; }
+    const seq = ++fetchSeq;                 // 快速输入时丢弃过期响应,防止旧结果闪回
+    tmr = setTimeout(async () => {
+      try {
+        const r = await fetch('/api/tags/search?q=' + encodeURIComponent(q));
+        const tags = r.ok ? ((await r.json()).tags || []) : [];
+        if (seq !== fetchSeq) return;
+        items = tags;
+      } catch (e) {
+        if (seq !== fetchSeq) return;
+        items = [];
+      }
+      active = items.length ? 0 : -1;
+      render();
+    }, 180);
+  });
+  t.addEventListener('keydown', (e) => {
+    if (dd.hidden) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (items.length) {
+        active = (active + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length;
+        render();
+      }
+    } else if ((e.key === 'Enter' || e.key === 'Tab') && active >= 0) {
+      e.preventDefault();
+      accept(active);
+    } else if (e.key === 'Escape') {
+      close();
+    }
+  });
+  t.addEventListener('blur', () => setTimeout(close, 150));
+}
+
+function _attachAiRow(control, t) {
+  const row = document.createElement('div');
+  row.className = 'ai-row';
+  const wrap = document.createElement('div');
+  wrap.className = 'select is-small ai-style';
+  const sel = document.createElement('select');
+  for (const [v, label] of AI_STYLES) {
+    const op = document.createElement('option');
+    op.value = v;
+    op.textContent = label;
+    sel.appendChild(op);
+  }
+  wrap.appendChild(sel);
+  row.appendChild(wrap);
+  // 模型下拉:列表来自 LiteGate 网关,选择记忆在 localStorage
+  const mwrap = document.createElement('div');
+  mwrap.className = 'select is-small ai-model';
+  mwrap.hidden = true;
+  const selM = document.createElement('select');
+  mwrap.appendChild(selM);
+  row.appendChild(mwrap);
+  _aiModels().then(d => {
+    const models = d.models || [];
+    if (!models.length) return;
+    const saved = localStorage.getItem('comfyweb.aimodel');
+    const want = models.includes(saved) ? saved : d.default;   // 已下线的模型回退默认
+    for (const m of models) {
+      const op = document.createElement('option');
+      op.value = m;
+      op.textContent = m;
+      if (m === want) op.selected = true;
+      selM.appendChild(op);
+    }
+    mwrap.hidden = false;
+  }).catch(() => {});
+  selM.addEventListener('change', () =>
+    localStorage.setItem('comfyweb.aimodel', selM.value));
+  const run = async (kind, btn) => {
+    const text = t.value.trim();
+    if (!text) return;
+    const old = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = kind === 'polish' ? '润色中…' : '翻译中…';
+    try {
+      const r = await fetch('/api/ai/' + kind, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, style: sel.value, model: selM.value || undefined }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || r.status);
+      t.value = d.text;
+      t.dispatchEvent(new Event('input', { bubbles: true }));
+      t.focus();
+    } catch (e) {
+      alert('AI ' + (kind === 'polish' ? '润色' : '翻译') + '失败: ' + e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = old;
+    }
+  };
+  for (const [kind, label] of [['polish', 'AI 润色'], ['translate', 'AI 翻译']]) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'button is-small is-light';
+    b.textContent = label;
+    b.addEventListener('click', () => run(kind, b));
+    row.appendChild(b);
+  }
+  control.appendChild(row);
+}
+
+/* textarea 参数字段:tag 联想下拉;正面提示词加 AI 润色/翻译行 */
+function enhancePromptField(field, p) {
+  const t = field.querySelector('textarea');
+  if (!t) return;
+  const control = field.querySelector('.control');
+  control.classList.add('prompt-control');
+  _attachTagComplete(control, t);
+  if (p.role === 'positive') _attachAiRow(control, t);
 }
