@@ -18,6 +18,8 @@
     if (dark) root.setAttribute('data-theme', 'dark');
     else root.removeAttribute('data-theme');
     root.style.colorScheme = dark ? 'dark' : 'light';
+    /* 样式表加载前先把画布刷成主题底色,避免夜间模式闪白(色值须与 skin.css 的 --bg 一致) */
+    root.style.background = dark ? '#12141c' : '#f6f7fb';
   }
   window.comfyTheme = apply;
   try { apply(localStorage.getItem('comfyweb.theme') || 'system'); } catch (e) {}
@@ -38,9 +40,10 @@ document.addEventListener('error', function (e) {
   var t = e.target;
   if (t && t.tagName === 'IMG' && !t.dataset.err) {
     t.dataset.err = '1';
+    var dark = document.documentElement.getAttribute('data-theme') === 'dark';
     t.src = 'data:image/svg+xml;utf8,' + encodeURIComponent(
       '<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96">' +
-      '<rect width="96" height="96" fill="#f1f3f8"/>' +
+      '<rect width="96" height="96" fill="' + (dark ? '#1a1d28' : '#f1f3f8') + '"/>' +
       '<text x="48" y="50" font-size="11" text-anchor="middle" fill="#8a90a0">图片缺失</text></svg>');
   }
 }, true);
