@@ -3,6 +3,8 @@
   --text:#1f2430;--muted:#8a90a0;--ok:#22c55e;--bad:#ef4444;--warn:#f59e0b;
   --radius:12px;--radius-s:8px;--gap:1.25rem}
 body{background:var(--bg);color:var(--text);font-variant-numeric:tabular-nums}
+/* 覆盖 Bulma 的 html{background-color:#fff},否则 CSS 加载前/回弹露出的画布是白的 */
+html{background:var(--bg)}
 
 /* 卡片:白底+细边框,无阴影 */
 .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:none}
