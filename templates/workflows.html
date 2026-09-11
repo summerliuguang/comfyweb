@@ -6,31 +6,67 @@
   <a class="button is-link is-small" href="/workflows/import">导入模板</a>
 </div>
 
-<div class="panel">
-  <h2 class="title is-5">ComfyUI 服务器工作流 <span class="tag is-light" id="srvCount">…</span></h2>
-  <p class="hint" style="margin-bottom:.6rem">自动列出 ComfyUI 里「保存」过的工作流;「快速导入」按默认参数直接入库,「评审导入」先确认参数再保存。</p>
+<details class="wf-group panel">
+  <summary>收藏工作流 <span class="tag is-light">{{ favs|length }}</span></summary>
+  {% if favs %}
+  <div style="margin-top:.6rem">
+    {% for w in favs %}
+    <div class="wf-line">
+      <span class="wf-name">{{ w.name }}</span>
+      <div class="wf-acts">
+        <a class="button is-small is-link is-light" href="/?template={{ w.id }}">去生成</a>
+        <button class="button is-small w-fav" data-id="{{ w.id }}" data-fav="1">已收藏</button>
+        <a class="button is-small" href="/workflows/{{ w.id }}/edit">编辑</a>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="empty" style="margin-top:.6rem">还没有收藏。在「我的模板」里点「收藏」,常用工作流会置顶显示在这里。</p>
+  {% endif %}
+</details>
+
+<details class="wf-group panel">
+  <summary>ComfyUI 服务器工作流 <span class="tag is-light" id="srvCount">…</span></summary>
+  <p class="hint" style="margin:.4rem 0 .6rem">自动列出 ComfyUI 里「保存」过的工作流;「快速导入」按默认参数直接入库,「评审导入」先确认参数再保存。</p>
   <div id="srvBox"><p class="empty">读取中…</p></div>
   <p class="task-err" id="srvError" hidden></p>
-</div>
+</details>
 
-<div class="panel">
-  <h2 class="title is-5">我的模板</h2>
+<details class="wf-group panel">
+  <summary>我的模板 <span class="tag is-light">{{ workflows|length }}</span></summary>
   {% if not workflows %}
-  <div class="empty">
+  <div class="empty" style="margin-top:.6rem">
     还没有工作流模板。从上方「ComfyUI 服务器工作流」一键导入,<br>
     或在 ComfyUI 里菜单 <b>工作流 → 导出(API)</b> 后到 <a href="/workflows/import">导入页</a> 粘贴。
   </div>
   {% else %}
-  <table class="param-table mobile-cards">
-    <thead><tr><th>名称</th><th class="w-check">启用</th><th>创建时间</th><th style="width:9rem"></th></tr></thead>
+  <div class="wf-filters">
+    {% for key, label in [('base_model', '底模'), ('scene', '场景'), ('purpose', '用途')] %}
+    <div class="wf-filter-row" data-key="{{ key }}">
+      <span class="wf-filter-label">{{ label }}</span>
+      <button type="button" class="chip on" data-v="">全部</button>
+      {% for v in opts[key] %}
+      <button type="button" class="chip" data-v="{{ v }}">{{ v }}</button>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  </div>
+  <table class="param-table mobile-cards" id="tplTable">
+    <thead><tr><th>名称</th><th class="w-check">启用</th><th>创建时间</th><th style="width:15rem"></th></tr></thead>
     <tbody>
       {% for w in workflows %}
-      <tr>
-        <td style="font-weight:600" data-label="名称">{{ w.name }}</td>
+      <tr data-base="{{ w.base_model }}" data-scene="{{ w.scene }}" data-purpose="{{ w.purpose }}">
+        <td style="font-weight:600" data-label="名称">{{ w.name }}
+          {% if w.base_model %}<span class="tag is-light">{{ w.base_model }}</span>{% endif %}
+          {% if w.scene %}<span class="tag is-light">{{ w.scene }}</span>{% endif %}
+        </td>
         <td class="w-check" data-label="启用"><input type="checkbox" class="w-enabled" data-id="{{ w.id }}" {{ 'checked' if w.enabled }}></td>
         <td class="task-meta" data-label="创建时间">{{ w.created_at }}</td>
         <td data-label="操作">
           <div class="buttons" style="justify-content:flex-end;margin:0">
+            <a class="button is-small is-link" href="/?template={{ w.id }}">去生成</a>
+            <button class="button is-small {{ 'is-link' if w.fav }} w-fav" data-id="{{ w.id }}" data-fav="{{ w.fav }}">{{ '已收藏' if w.fav else '收藏' }}</button>
             <a class="button is-small" href="/workflows/{{ w.id }}/edit">编辑</a>
             <button class="button is-small is-danger is-light w-del" data-id="{{ w.id }}" data-name="{{ w.name }}">删除</button>
           </div>
@@ -40,7 +76,7 @@
     </tbody>
   </table>
   {% endif %}
-</div>
+</details>
 {% endblock %}
 {% block scripts %}
 <script>
@@ -222,6 +258,46 @@
       const r = await fetch(`/api/workflows/${btn.dataset.id}/delete`, { method: 'POST' });
       if (r.ok) location.reload();
       else { const d = await r.json().catch(() => ({})); alert(d.error || r.status); }
+    });
+  });
+
+  /* 收藏/取消收藏:更新按钮态后刷新页面,收藏组与计数随之同步 */
+  document.querySelectorAll('.w-fav').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      btn.classList.add('is-loading');
+      btn.disabled = true;
+      const r = await fetch('/api/workflows/' + btn.dataset.id, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fav: btn.dataset.fav !== '1' })
+      });
+      if (r.ok) location.reload();
+      else {
+        const d = await r.json().catch(() => ({}));
+        alert(d.error || r.status);
+        btn.classList.remove('is-loading');
+        btn.disabled = false;
+      }
+    });
+  });
+
+  /* 分类筛选:底模/场景/用途三个维度同时生效(与),「全部」清除该维度 */
+  const rows = [...document.querySelectorAll('#tplTable tbody tr')];
+  const active = { base_model: '', scene: '', purpose: '' };
+  const DATA_KEY = { base_model: 'base', scene: 'scene', purpose: 'purpose' };
+  function applyFilter() {
+    for (const tr of rows) {
+      const hit = Object.entries(active).every(([k, v]) => !v || tr.dataset[DATA_KEY[k]] === v);
+      tr.style.display = hit ? '' : 'none';
+    }
+  }
+  document.querySelectorAll('.wf-filter-row').forEach(row => {
+    const key = row.dataset.key;
+    row.addEventListener('click', (e) => {
+      const btn = e.target.closest('.chip');
+      if (!btn) return;
+      row.querySelectorAll('.chip').forEach(c => c.classList.toggle('on', c === btn));
+      active[key] = btn.dataset.v;
+      applyFilter();
     });
   });
 })();
