@@ -154,6 +154,34 @@ class ApiSmoke(unittest.TestCase):
         finally:
             client.ws_state = orig
 
+    def test_remote_workflows_failure_cooldown(self):
+        """拉取失败后 30s 冷却期内直接 503,不再每次都跑满重试周期。"""
+        import time
+        import app as app_mod
+        from comfy_client import client
+        from workflow import WorkflowParseError  # noqa: F401  (确保 ComfyError 可用)
+        from comfy_client import ComfyError
+        orig_state, orig_fn = client.ws_state, app_mod.remote_workflow_names
+        client.ws_state = "已连接"
+        app_mod._udwf_fail_at[0] = 0.0
+
+        def boom():
+            raise ComfyError("连接 ComfyUI 失败: 测试")
+        app_mod.remote_workflow_names = boom
+        try:
+            r = self.c.get("/api/remote/workflows")
+            self.assertEqual(r.status_code, 502)
+            r2 = self.c.get("/api/remote/workflows")
+            self.assertEqual(r2.status_code, 503)
+            self.assertIn("稍候", r2.get_json()["error"])
+            app_mod._udwf_fail_at[0] = time.time() - 31  # 冷却期过后恢复
+            r3 = self.c.get("/api/remote/workflows")
+            self.assertEqual(r3.status_code, 502)
+        finally:
+            client.ws_state = orig_state
+            app_mod.remote_workflow_names = orig_fn
+            app_mod._udwf_fail_at[0] = 0.0
+
 
 if __name__ == "__main__":
     unittest.main()

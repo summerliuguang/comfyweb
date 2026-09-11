@@ -693,15 +693,21 @@ def api_workflow_parse():
             "node_count": tpl["node_count"], "warnings": warnings}
 
 
+_udwf_fail_at = [0.0]  # 最近一次远端工作流列表拉取失败时刻;30s 内不再重试长周期
+
+
 @app.get("/api/remote/workflows")
 def api_remote_workflows():
     """列出 ComfyUI 用户目录里已保存的工作流文件(预热后直接命中缓存)。"""
     # WS 状态由常驻线程维护;明确未连接时快速失败,避免前端"读取中"挂满 3 次重试周期
     if client.ws_state not in ("已连接", "已断开,正在重连"):
         return err(f"ComfyUI {client.ws_state},请确认 ComfyUI 正在运行", 503)
+    if time.time() - _udwf_fail_at[0] < 30:
+        return err("刚刚连接失败,ComfyUI 可能未就绪,请稍候点「重试」", 503)
     try:
         names = remote_workflow_names()
     except ComfyError as e:
+        _udwf_fail_at[0] = time.time()
         return err(e, 502)
     names = sorted(str(n) for n in names if str(n).endswith(".json"))
     # 旧模板补来源:名字与远端文件名一致即视为从它导入(仅对 source 为空的行)

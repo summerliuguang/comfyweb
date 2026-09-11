@@ -90,7 +90,9 @@
     syncSeg();
   });
   syncSeg();
-  // ComfyUI 连接状态:顶栏圆点 + 侧栏状态行,每 10 秒轮询
+  // ComfyUI 连接状态:顶栏圆点 + 侧栏状态行,每 10 秒轮询;
+  // 断线恢复瞬间派发 comfy-conn-restored,页面可自动重拉受影响的数据
+  var wasConn = null;
   function setConn(ok, tip) {
     var d = document.getElementById('connDotM');
     if (d) {
@@ -110,7 +112,11 @@
     fetch('/api/status').then(function (r) { return r.json(); }).then(function (d) {
       var ok = d.ws === '已连接';
       setConn(ok, 'ComfyUI ' + (d.ws || ''));
-    }).catch(function () { setConn(false, 'ComfyUI 未连接'); });
+      if (ok && wasConn === false) {
+        document.dispatchEvent(new Event('comfy-conn-restored'));
+      }
+      wasConn = ok;
+    }).catch(function () { setConn(false, 'ComfyUI 未连接'); wasConn = false; });
   }
   pollConn();
   setInterval(pollConn, 10000);

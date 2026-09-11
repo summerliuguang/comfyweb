@@ -116,6 +116,10 @@
   wfSelect.addEventListener('change', () => loadTemplate());
   formArea.addEventListener('input', () => saveDraft());
   formArea.addEventListener('change', () => saveDraft());
+  // ComfyUI 断线恢复后自动重拉模板,清掉"未连接"的空下拉(草稿每次输入已保存,不丢)
+  document.addEventListener('comfy-conn-restored', () => {
+    if (tpl && formArea.querySelector('select option:disabled')) loadTemplate();
+  });
 
   $('btnGenerate').addEventListener('click', async () => {
     const btn = $('btnGenerate');
