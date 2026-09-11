@@ -14,8 +14,8 @@
   </div>
   <div class="buttons">
     <button class="button is-link" id="btnTest">保存并测试连接</button>
-    <button class="button is-light" id="btnRefreshModels">刷新模型列表</button>
     <span class="status" id="wsState">WS 状态: --</span>
+    <button class="button is-light" id="btnRefreshModels" disabled title="ComfyUI 未连接,无需刷新">刷新模型列表</button>
   </div>
   <p class="task-err" id="testError" hidden></p>
   <p class="hint" id="refreshHint" hidden></p>
@@ -174,7 +174,8 @@
     } catch (e) { alert(e.message); }
   });
 
-  $('btnTokenClear').addEventListener('click', async () => {
+  if ($('btnTokenClear'))  // 按钮仅在有 Token 时渲染,不存在则跳过绑定(否则脚本中断,后续全失效)
+    $('btnTokenClear').addEventListener('click', async () => {
     try {
       await api('/api/settings', { method: 'POST', body: JSON.stringify({ civitai_token_clear: true }) });
       $('civToken').value = '';
@@ -186,9 +187,18 @@
   async function loadWs() {
     try {
       const d = await api('/api/status');
+      const ok = d.ws === '已连接';
       $('wsState').textContent = 'WS 状态: ' + d.ws;
+      $('wsState').classList.toggle('ok', ok);
+      $('wsState').classList.toggle('bad', !ok);
+      // 刷新模型列表只在已连接时有意义,断连时禁用避免无效点击
+      const btn = $('btnRefreshModels');
+      btn.disabled = !ok;
+      btn.title = ok ? '清空模型/LoRA 列表缓存,生成页下次打开即拉最新' : 'ComfyUI 未连接,无需刷新';
     } catch (e) { /* 忽略 */ }
   }
+  loadWs();
+  setInterval(loadWs, 10000);
 
   async function loadQueue() {
     const box = $('queueBox');
@@ -220,7 +230,6 @@
     catch (e) { alert('中断失败: ' + e.message); }
   });
 
-  loadWs();
 })();
 </script>
 {% endblock %}
