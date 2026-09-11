@@ -11,6 +11,29 @@
     <label class="label">模板名称</label>
     <input class="input" id="wfName" type="text">
   </div>
+  <div class="field">
+    <label class="label">分类（用于工作流页筛选；导入时已按名称与模型自动猜过）</label>
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+      <input class="input" id="wfBase" list="baseList" placeholder="底模,如 SDXL" style="flex:1;min-width:8rem">
+      <input class="input" id="wfScene" list="sceneList" placeholder="场景,如 文生图" style="flex:1;min-width:8rem">
+      <input class="input" id="wfPurpose" list="purposeList" placeholder="用途,自由填写" style="flex:1;min-width:8rem">
+    </div>
+    <datalist id="baseList">
+      <option>SD1.5</option><option>SDXL</option><option>Pony</option><option>Illustrious</option>
+      <option>NoobAI</option><option>Flux</option><option>SD3.5</option><option>Wan</option>
+      <option>混元</option><option>Chroma</option>
+    </datalist>
+    <datalist id="sceneList">
+      <option>文生图</option><option>图生图</option><option>局部重绘</option><option>放大</option>
+      <option>反推</option><option>控制</option><option>润色</option>
+    </datalist>
+    <datalist id="purposeList">
+      <option>人像</option><option>风景</option><option>产品图</option><option>二次元</option>
+    </datalist>
+    <label class="checkbox" style="margin-top:.45rem">
+      <input type="checkbox" id="wfFav"> 收藏此工作流（显示在「收藏工作流」组）
+    </label>
+  </div>
   <p class="hint" style="margin-bottom:.7rem">勾选「显示」的参数会出现在生成页表单里;「高级」勾选的参数收进折叠区。</p>
   <div style="overflow-x:auto">
     <table class="param-table">
@@ -38,6 +61,10 @@
     const data = await res.json();
     if (!res.ok) { $('loading').textContent = data.error || res.status; return; }
     $('wfName').value = data.name;
+    $('wfBase').value = data.base_model || '';
+    $('wfScene').value = data.scene || '';
+    $('wfPurpose').value = data.purpose || '';
+    $('wfFav').checked = !!data.fav;
     renderParamEditor($('paramRows'), data.params);
     $('editor').hidden = false;
     $('loading').hidden = true;
@@ -48,7 +75,11 @@
     try {
       const res = await fetch('/api/workflows/' + wid, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: $('wfName').value, params: collectParams($('paramRows')) })
+        body: JSON.stringify({
+          name: $('wfName').value, params: collectParams($('paramRows')),
+          scene: $('wfScene').value, base_model: $('wfBase').value,
+          purpose: $('wfPurpose').value, fav: $('wfFav').checked
+        })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || res.status);

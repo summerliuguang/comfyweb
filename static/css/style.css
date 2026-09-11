@@ -13,6 +13,30 @@
 .field .label{font-size:.82rem;margin-bottom:.3rem}
 .hint{font-size:.72rem;color:var(--muted);margin-top:.25rem;line-height:1.5}
 
+/* select 内部跟随外壳宽度(否则外壳拉伸后 select 文字与箭头间大段留白) */
+.select select{width:100%}
+
+/* 工作流页:分组折叠 + 分类筛选 chips + 收藏行 */
+.wf-group summary{cursor:pointer;font-weight:600;display:flex;align-items:center;gap:.5rem;
+  list-style:none;user-select:none}
+.wf-group summary::-webkit-details-marker{display:none}
+.wf-group summary::after{content:'展开';font-size:.72rem;color:var(--muted);margin-left:auto}
+.wf-group[open] summary::after{content:'收起'}
+.wf-group[open] summary{margin-bottom:.6rem}
+.wf-line{display:flex;align-items:center;justify-content:space-between;gap:.6rem;
+  padding:.45rem 0;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.wf-line:last-child{border-bottom:none}
+.wf-name{font-size:.88rem;font-weight:600}
+.wf-acts{display:flex;gap:.4rem;flex-wrap:wrap;margin-left:auto}
+.wf-filters{display:flex;flex-direction:column;gap:.4rem;margin-bottom:.7rem}
+.wf-filter-row{display:flex;gap:.35rem;align-items:center;flex-wrap:wrap}
+.wf-filter-label{font-size:.72rem;color:var(--muted);flex:none;width:2.4rem}
+.chip{border:1px solid var(--line);background:var(--card);color:var(--text);
+  border-radius:999px;padding:.18rem .65rem;font-size:.75rem;cursor:pointer;
+  transition:background-color .18s ease,border-color .18s ease,color .18s ease}
+.chip:hover{border-color:#c9cfdd}
+.chip.on{background:var(--primary-weak);border-color:var(--primary);color:var(--primary)}
+
 /* ComfyUI 连接状态圆点(顶栏;侧栏用 .status 组件) */
 .conn-dot{flex:none;width:8px;height:8px;border-radius:999px;background:#c2c7d2;display:inline-block}
 .conn-dot.ok{background:var(--ok)}

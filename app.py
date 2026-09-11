@@ -234,7 +234,11 @@ def page_generate():
 @app.get("/workflows")
 def page_workflows():
     rows = db.query("SELECT * FROM workflows ORDER BY id DESC")
-    return render_template("workflows.html", workflows=rows, active="workflows")
+    favs = [r for r in rows if r["fav"]]
+    opts = {k: sorted({r[k] for r in rows if r[k]})
+            for k in ("scene", "base_model", "purpose")}
+    return render_template("workflows.html", workflows=rows, favs=favs, opts=opts,
+                           active="workflows")
 
 
 @app.get("/workflows/import")
@@ -696,6 +700,35 @@ def api_workflow_parse():
 _udwf_fail_at = [0.0]  # 最近一次远端工作流列表拉取失败时刻;30s 内不再重试长周期
 
 
+_SCENE_KEYWORDS = [("图生图", "图生图"), ("重绘", "局部重绘"), ("放大", "放大"),
+                   ("超分", "放大"), ("反推", "反推"), ("controlnet", "控制"),
+                   ("控制", "控制"), ("文生图", "文生图"), ("润色", "润色")]
+_BASE_KEYWORDS = [("flux", "Flux"), ("pony", "Pony"), ("illustrious", "Illustrious"),
+                  ("noobai", "NoobAI"), ("hunyuan", "混元"), ("wan", "Wan"),
+                  ("chroma", "Chroma"), ("sd3", "SD3.5"), ("xl", "SDXL"),
+                  ("v1-5", "SD1.5"), ("v1.5", "SD1.5"), ("sd1", "SD1.5")]
+
+
+def guess_workflow_tags(name, tpl):
+    """按工作流名称与模型参数默认值猜 (场景, 底模);猜不出留空,编辑页可改。"""
+    low = (name or "").lower()
+    scene = next((s for kw, s in _SCENE_KEYWORDS if kw in low or kw in (name or "")), "")
+    base = ""
+    for p in tpl.get("params") or []:
+        if p.get("dynamic") == "checkpoints" and p.get("value"):
+            fname = str(p["value"]).lower()
+            base = next((b for kw, b in _BASE_KEYWORDS if kw in fname), "")
+            break
+    return scene, base
+
+
+def _apply_guessed_tags(wid, name, tpl):
+    scene, base = guess_workflow_tags(name, tpl)
+    if scene or base:
+        db.execute("UPDATE workflows SET scene=?, base_model=? WHERE id=?",
+                   (scene, base, wid))
+
+
 @app.get("/api/remote/workflows")
 def api_remote_workflows():
     """列出 ComfyUI 用户目录里已保存的工作流文件(预热后直接命中缓存)。"""
@@ -783,6 +816,7 @@ def api_workflow_import_remote_save():
                (f"wf_{wid}.json", name, wid))
     save_tpl(wid, {"version": 1, "name": display, "workflow": tpl["workflow"],
                    "params": tpl["params"], "batch_node": tpl["batch_node"]})
+    _apply_guessed_tags(wid, display, tpl)
     return {"ok": True, "id": wid, "name": display, "warnings": warnings}
 
 
@@ -805,6 +839,7 @@ def api_workflow_create():
                (f"wf_{wid}.json", source, wid))
     save_tpl(wid, {"version": 1, "name": name, "workflow": wf,
                    "params": params, "batch_node": data.get("batch_node")})
+    _apply_guessed_tags(wid, name, {"params": params})
     return {"ok": True, "id": wid}
 
 
@@ -818,6 +853,8 @@ def api_workflow_get(wid):
     if repair_template(tpl):
         db.set_workflow_template(wid, tpl)  # 修复结果落库,下次直接可用
     return {"id": row["id"], "name": row["name"], "enabled": row["enabled"],
+            "fav": row["fav"], "scene": row["scene"], "base_model": row["base_model"],
+            "purpose": row["purpose"],
             "params": tpl["params"], "batch_node": tpl["batch_node"],
             "workflow": tpl["workflow"]}
 
@@ -841,6 +878,13 @@ def api_workflow_update(wid):
     if "enabled" in data:
         db.execute("UPDATE workflows SET enabled=? WHERE id=?",
                    (1 if data.get("enabled") else 0, int(wid)))
+    if "fav" in data:
+        db.execute("UPDATE workflows SET fav=? WHERE id=?",
+                   (1 if data.get("fav") else 0, int(wid)))
+    for k in ("scene", "base_model", "purpose"):  # 列名为字面量白名单,无注入面
+        if k in data:
+            db.execute(f"UPDATE workflows SET {k}=? WHERE id=?",
+                       ((data.get(k) or "").strip()[:50], int(wid)))
     return {"ok": True}
 
 

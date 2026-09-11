@@ -25,6 +25,10 @@ CREATE TABLE IF NOT EXISTS workflows(
   template_json TEXT,
   source TEXT NOT NULL DEFAULT '',
   enabled INTEGER NOT NULL DEFAULT 1,
+  fav INTEGER NOT NULL DEFAULT 0,
+  scene TEXT NOT NULL DEFAULT '',
+  base_model TEXT NOT NULL DEFAULT '',
+  purpose TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
 CREATE TABLE IF NOT EXISTS tasks(
@@ -127,10 +131,14 @@ def init_db():
             "INSERT INTO workflows(id, name, filename, template_json, enabled, created_at) "
             "SELECT id, name, filename, template_json, enabled, created_at FROM workflows_old")
         db.execute("DROP TABLE workflows_old")
-    # 增量列:模板导入来源 / 画廊筛选用的主模型与 LoRA
+    # 增量列:模板导入来源 / 画廊筛选用的主模型与 LoRA / 收藏与分类(底模/场景/用途)
     cols = {r[1] for r in db.execute("PRAGMA table_info(workflows)")}
     if "source" not in cols:
         db.execute("ALTER TABLE workflows ADD COLUMN source TEXT NOT NULL DEFAULT ''")
+    for col in ("fav", "scene", "base_model", "purpose"):
+        if col not in cols:
+            ddl = "INTEGER NOT NULL DEFAULT 0" if col == "fav" else "TEXT NOT NULL DEFAULT ''"
+            db.execute(f"ALTER TABLE workflows ADD COLUMN {col} {ddl}")
     tcols = {r[1] for r in db.execute("PRAGMA table_info(tasks)")}
     if "model" not in tcols:
         db.execute("ALTER TABLE tasks ADD COLUMN model TEXT NOT NULL DEFAULT ''")
