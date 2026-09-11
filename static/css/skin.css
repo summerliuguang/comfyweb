@@ -31,6 +31,12 @@ html{background:var(--bg)}
 .menu-list a:hover{background:var(--primary-weak)}
 .menu-list a.on{background:var(--primary-weak);color:var(--primary)}
 
+/* 桌面固定侧栏(≤899px 时隐藏,见文件末尾 media query) */
+.side{position:fixed;left:0;top:0;bottom:0;width:212px;background:var(--card);
+  border-right:1px solid var(--line);padding:1.1rem .9rem;overflow-y:auto;z-index:10}
+.logo{font-weight:700;font-size:1.02rem;margin-bottom:1.1rem;color:var(--text);letter-spacing:.02em}
+.foot{margin-top:1.2rem;font-size:.68rem;color:var(--muted);line-height:1.6}
+
 /* tag:全圆角,浅底描边 */
 .tag{border-radius:999px}
 .tag.is-light{background:#f1f3f8;border:1px solid var(--line)}
