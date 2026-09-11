@@ -144,12 +144,14 @@ def fetch_object_info(classes):
 
 
 def dynamic_options_for(param):
-    """动态下拉选项:/models/<folder>,当前值不在列表时置顶。失败返回空。"""
+    """动态下拉选项:/models/<folder>,当前值不在列表时置顶。
+    ComfyUI 不可达时返回空并标记 dynamic_empty,前端给占位提示。"""
     folder = param["dynamic"]
     try:
         opts = [str(o) for o in cached("models:" + folder, 120,
                                        lambda f=folder: client.models(f))]
     except ComfyError:
+        param["dynamic_empty"] = True
         return []
     val = str(param.get("value") or "")
     if val and val not in opts:
@@ -694,6 +696,9 @@ def api_workflow_parse():
 @app.get("/api/remote/workflows")
 def api_remote_workflows():
     """列出 ComfyUI 用户目录里已保存的工作流文件(预热后直接命中缓存)。"""
+    # WS 状态由常驻线程维护;明确未连接时快速失败,避免前端"读取中"挂满 3 次重试周期
+    if client.ws_state not in ("已连接", "已断开,正在重连"):
+        return err(f"ComfyUI {client.ws_state},请确认 ComfyUI 正在运行", 503)
     try:
         names = remote_workflow_names()
     except ComfyError as e:

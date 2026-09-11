@@ -42,6 +42,12 @@ function widgetControl(p) {
     const d = document.createElement('div');
     d.className = 'select is-fullwidth';
     const s = document.createElement('select');
+    if (p.dynamic_empty) {  // ComfyUI 不可达,动态列表拉取失败
+      const ph = document.createElement('option');
+      ph.disabled = true;
+      ph.textContent = 'ComfyUI 未连接,列表不可用';
+      s.appendChild(ph);
+    }
     const opts = p.options && p.options.length ? p.options : [p.value || ''];
     for (const o of opts) {
       const op = document.createElement('option');

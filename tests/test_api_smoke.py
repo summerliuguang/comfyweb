@@ -141,6 +141,19 @@ class ApiSmoke(unittest.TestCase):
         finally:
             app_mod.civitai.fetch_image = orig
 
+    def test_remote_workflows_fast_fail_when_disconnected(self):
+        """WS 明确未连接时 /api/remote/workflows 应快速 503,不进入 3 次重试的长等待。"""
+        import app as app_mod
+        from comfy_client import client
+        orig = client.ws_state
+        client.ws_state = "未启动"
+        try:
+            r = self.c.get("/api/remote/workflows")
+            self.assertEqual(r.status_code, 503)
+            self.assertIn("ComfyUI", r.get_json()["error"])
+        finally:
+            client.ws_state = orig
+
 
 if __name__ == "__main__":
     unittest.main()
