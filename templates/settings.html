@@ -46,7 +46,7 @@
   <div class="field">
     <label class="label">代理地址（可选）</label>
     <input class="input" id="civProxy" type="text" value="{{ civitai_proxy }}" placeholder="http://192.168.x.x:20171" inputmode="url">
-    <p class="hint">本机无法直连 civitai.com 时填写；留空则直连。模型/LoRA 页与图片代理都走这里。</p>
+    <p class="hint">本机无法直连 civitai.com 时填写；留空则直连。可填多个代理（逗号分隔），失败自动轮换下一个。模型/LoRA 页与图片代理都走这里。</p>
   </div>
   <div class="field">
     <label class="label">API Token（可选）</label>

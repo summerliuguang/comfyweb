@@ -96,5 +96,28 @@ class TestCivStore(unittest.TestCase):
         self.assertIn("新版", d["description"])
 
 
+class TestProxyList(unittest.TestCase):
+    def tearDown(self):
+        db.set_setting("civitai_proxy", "")
+
+    def test_empty(self):
+        db.set_setting("civitai_proxy", "")
+        self.assertEqual(civitai._proxy_list(), [])
+
+    def test_single_and_multiple(self):
+        db.set_setting("civitai_proxy", "http://192.168.1.9:20171")
+        self.assertEqual(civitai._proxy_list(), ["http://192.168.1.9:20171"])
+        db.set_setting("civitai_proxy",
+                       "http://192.168.1.9:20171, http://192.168.1.10:20171\nhttp://192.168.1.11:20171")
+        self.assertEqual(civitai._proxy_list(), [
+            "http://192.168.1.9:20171", "http://192.168.1.10:20171",
+            "http://192.168.1.11:20171"])
+
+    def test_invalid_raises(self):
+        db.set_setting("civitai_proxy", "http://ok:1, ftp://bad")
+        with self.assertRaises(civitai.CivitaiError):
+            civitai._proxy_list()
+
+
 if __name__ == "__main__":
     unittest.main()
