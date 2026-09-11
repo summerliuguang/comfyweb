@@ -13,6 +13,11 @@
 .field .label{font-size:.82rem;margin-bottom:.3rem}
 .hint{font-size:.72rem;color:var(--muted);margin-top:.25rem;line-height:1.5}
 
+/* ComfyUI 连接状态圆点(顶栏;侧栏用 .status 组件) */
+.conn-dot{flex:none;width:8px;height:8px;border-radius:999px;background:#c2c7d2;display:inline-block}
+.conn-dot.ok{background:var(--ok)}
+.conn-dot.bad{background:var(--bad)}
+
 /* 种子行:数字输入 + 随机开关 */
 .seed-row{display:flex;gap:.6rem;align-items:center}
 .seed-row .input{flex:1}

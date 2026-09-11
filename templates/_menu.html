@@ -11,6 +11,7 @@
       <li><a href="/settings" class="{{ 'on' if active == 'settings' }}">设置</a></li>
     </ul>
   </aside>
+  <div class="status" id="connStateS" style="margin-top:1.1rem">ComfyUI</div>
   <div class="foot">ComfyWeb<br>家庭内网专用</div>
 </aside>
 
@@ -23,9 +24,10 @@
       </svg>
     </button>
     <span class="topbar-brand">ComfyWeb</span>
+    <span class="conn-dot" id="connDotM" title="ComfyUI 连接状态"></span>
   </div>
   <span class="topbar-left">
-    <button class="theme-quick" id="themeQuick" aria-label="切换日间夜间">🌙</button>
+    <button class="theme-quick" id="themeQuick" aria-label="切换日间夜间"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></button>
     <span class="topbar-title" data-page-title>…</span>
   </span>
 </header>
@@ -76,7 +78,7 @@
     });
     var dark = document.documentElement.getAttribute('data-theme') === 'dark';
     var q = document.getElementById('themeQuick');
-    if (q) q.textContent = dark ? '☀️' : '🌙';
+    if (q) q.innerHTML = dark ? '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="2"/><path d="M12 2.5v2.6M12 18.9v2.6M2.5 12h2.6M18.9 12h2.6M4.9 4.9l1.9 1.9M17.2 17.2l1.9 1.9M19.1 4.9l-1.9 1.9M6.8 17.2l-1.9 1.9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>' : '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>';
   }
   document.querySelectorAll('[data-theme-seg] button').forEach(function (b) {
     b.addEventListener('click', function () { window.comfyTheme(b.dataset.t); syncSeg(); });
@@ -88,5 +90,29 @@
     syncSeg();
   });
   syncSeg();
+  // ComfyUI 连接状态:顶栏圆点 + 侧栏状态行,每 10 秒轮询
+  function setConn(ok, tip) {
+    var d = document.getElementById('connDotM');
+    if (d) {
+      d.classList.toggle('ok', ok);
+      d.classList.toggle('bad', !ok);
+      d.title = tip;
+    }
+    var s = document.getElementById('connStateS');
+    if (s) {
+      s.classList.toggle('ok', ok);
+      s.classList.toggle('bad', !ok);
+      s.textContent = ok ? 'ComfyUI 已连接' : 'ComfyUI 未连接';
+      s.title = tip;
+    }
+  }
+  function pollConn() {
+    fetch('/api/status').then(function (r) { return r.json(); }).then(function (d) {
+      var ok = d.ws === '已连接';
+      setConn(ok, 'ComfyUI ' + (d.ws || ''));
+    }).catch(function () { setConn(false, 'ComfyUI 未连接'); });
+  }
+  pollConn();
+  setInterval(pollConn, 10000);
 })();
 </script>
