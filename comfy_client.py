@@ -249,7 +249,9 @@ class ComfyClient:
     def _ws_loop(self):
         import websocket
 
+        delay = 3.0  # 指数退避:连续失败 3s→30s 封顶,连上即恢复 3s
         while not self._stop.is_set():
+            connected = False
             try:
                 base = self.base_url()
             except ComfyError:
@@ -260,6 +262,8 @@ class ComfyClient:
             ws = None
             try:
                 ws = websocket.create_connection(ws_url, timeout=10)
+                connected = True
+                delay = 3.0
                 self.ws_state = "已连接"
                 if self.on_connect:
                     threading.Thread(target=self.on_connect, daemon=True).start()
@@ -284,8 +288,11 @@ class ComfyClient:
                         ws.close()
                     except Exception:
                         pass
-            if not self._stop.is_set():
-                self._stop.wait(3)
+            if self._stop.is_set():
+                break
+            self._stop.wait(3.0 if connected else delay)
+            if not connected:
+                delay = min(delay * 2, 30.0)
 
     def _handle_event(self, msg):
         etype = msg.get("type")

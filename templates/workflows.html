@@ -49,10 +49,20 @@
   const box = document.getElementById('srvBox');
 
   async function api(url, body) {
-    const r = await fetch(url, body ? {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    } : {});
+    const ctl = new AbortController();
+    const tmr = setTimeout(() => ctl.abort(), 25000);  // ComfyUI 无响应时 25s 快速失败
+    let r;
+    try {
+      r = await fetch(url, body ? {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body), signal: ctl.signal
+      } : { signal: ctl.signal });
+    } catch (e) {
+      if (e.name === 'AbortError') throw new Error('ComfyUI 无响应(超时)');
+      throw e;
+    } finally {
+      clearTimeout(tmr);
+    }
     const d = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(d.error || r.status);
     return d;
@@ -125,7 +135,20 @@
         box.appendChild(row);
       }
     } catch (e) {
-      box.innerHTML = `<p class="task-err">读取失败: ${e.message}(检查设置页的 ComfyUI 地址)</p>`;
+      box.innerHTML = '';
+      const errp = document.createElement('p');
+      errp.className = 'task-err';
+      errp.textContent = `读取失败: ${e.message}(检查设置页的 ComfyUI 地址)`;
+      errp.style.cssText = 'display:flex;gap:.6rem;align-items:center;flex-wrap:wrap';
+      const retry = document.createElement('button');
+      retry.className = 'button is-small';
+      retry.textContent = '重试';
+      retry.addEventListener('click', () => {
+        box.innerHTML = '<p class="empty">读取中…</p>';
+        load();
+      });
+      errp.appendChild(retry);
+      box.appendChild(errp);
     }
   }
 
