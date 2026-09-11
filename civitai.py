@@ -44,25 +44,34 @@ def clear_cache():
         _cache.clear()
 
 
-def _proxies():
-    proxy = (db.get_setting("civitai_proxy") or "").strip()
-    if not proxy:
-        return None
-    if not re.match(r"^https?://[A-Za-z0-9.\-]+(:\d{1,5})?$", proxy):
-        raise CivitaiError("Civitai 代理地址无效,应为 http://IP:端口 形式")
-    return {"http": proxy, "https": proxy}
+def _proxy_list():
+    """设置里的代理,支持逗号/空白分隔多个(失败自动轮换下一个)。"""
+    raw = (db.get_setting("civitai_proxy") or "").strip()
+    out = []
+    for part in re.split(r"[,\s]+", raw):
+        part = part.strip()
+        if not part:
+            continue
+        if not re.match(r"^https?://[A-Za-z0-9.\-]+(:\d{1,5})?$", part):
+            raise CivitaiError("Civitai 代理地址无效,应为 http://IP:端口 形式")
+        out.append(part)
+    return out
 
 
 _sess_obj = None
+_proxy_idx = 0
 
 
 def _session():
     """带代理与凭据的会话(模块级复用,省去每请求 TLS 握手);
-    代理/Token 变更后由 reset_session() 重建。"""
+    代理/Token 变更后由 reset_session() 重建。多代理时用 _proxy_idx 指向的这一个。"""
     global _sess_obj
     if _sess_obj is None:
         s = requests.Session()
-        s.proxies = _proxies() or {}
+        proxies = _proxy_list()
+        if proxies:
+            p = proxies[_proxy_idx % len(proxies)]
+            s.proxies = {"http": p, "https": p}
         token = (db.get_setting("civitai_token") or "").strip()
         if token:
             s.headers["Authorization"] = f"Bearer {token}"
@@ -70,9 +79,15 @@ def _session():
     return _sess_obj
 
 
-def reset_session():
-    """设置页改了代理/Token 后调用,丢弃旧会话。"""
-    global _sess_obj
+def reset_session(rotate=False):
+    """设置页改了代理/Token 后调用,丢弃旧会话;rotate=True 时换下一个代理。"""
+    global _sess_obj, _proxy_idx
+    if rotate:
+        try:
+            if len(_proxy_list()) > 1:
+                _proxy_idx += 1
+        except CivitaiError:
+            pass
     _sess_obj = None
 
 
@@ -85,7 +100,7 @@ def _api_url(path):
 
 def get_json(path, params=None, timeout=40):
     """经代理拉 Civitai 偶发慢(实测 1~40s 波动,多为陈旧连接停顿):
-    失败后重建会话(丢掉旧连接)自动重试一次,仍失败才报错。"""
+    失败后重建会话并轮换到下一个代理(若配了多个)再试一次,仍失败才报错。"""
     r, last = None, None
     for _ in range(2):
         try:
@@ -93,7 +108,7 @@ def get_json(path, params=None, timeout=40):
             break
         except requests.RequestException as e:
             last = e
-            reset_session()
+            reset_session(rotate=True)
     else:
         raise CivitaiError(
             f"访问 Civitai 失败: {last.__class__.__name__},请检查设置页的代理配置") from last
