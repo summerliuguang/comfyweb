@@ -1227,7 +1227,7 @@ def _litegate_cfg():
 
 
 def _litegate_default_model():
-    return os.environ.get("LITEGATE_MODEL", "deepseek-v4-flash")
+    return os.environ.get("LITEGATE_MODEL", "deepseek-flash")
 
 
 def _litegate_chat(messages, max_tokens=2000, model=None):
@@ -1251,7 +1251,7 @@ def _litegate_chat(messages, max_tokens=2000, model=None):
     except ValueError:
         raise ComfyError("AI 网关返回非 JSON")
     if not txt:
-        # deepseek-v4-flash 是推理模型:思维链可能吃掉 max_tokens 导致正文为空
+        # deepseek-flash 是推理模型:思维链可能吃掉 max_tokens 导致正文为空
         raise ComfyError("AI 返回为空(思维链耗尽 token?)")
     return txt
 
