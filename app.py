@@ -265,7 +265,8 @@ def _gallery_filter():
     if q:
         conds.append("(t.prompt_text LIKE ? OR t.params_json LIKE ?)")
         args += [f"%{q}%", f"%{q}%"]
-    for key, col in (("wf", "t.workflow_name"), ("model", "t.model"), ("lora", "t.lora")):
+    for key, col in (("wf", "t.workflow_name"), ("model", "t.model"), ("lora", "t.lora"),
+                     ("cat", "t.category"), ("batch", "t.batch")):
         val = request.args.get(key, "").strip()
         if val:
             conds.append(f"{col} LIKE ?")
@@ -296,8 +297,8 @@ def page_gallery():
     pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
     page = min(page, pages)
     rows = db.query(
-        f"SELECT i.id, i.filename, i.subfolder, i.type, t.workflow_name, t.model, "
-        f"t.prompt_text, t.created_at AS task_created, i.created_at AS img_created "
+        f"SELECT i.id, i.filename, i.subfolder, i.type, i.fav, t.workflow_name, t.model, "
+        f"t.prompt_text, t.category, t.batch, t.created_at AS task_created, i.created_at AS img_created "
         f"FROM images i JOIN tasks t ON t.id=i.task_id {where} "
         f"ORDER BY i.id DESC LIMIT ? OFFSET ?",
         args + [PAGE_SIZE, (page - 1) * PAGE_SIZE])
@@ -317,6 +318,10 @@ def page_gallery():
             "SELECT DISTINCT model FROM tasks WHERE model!='' ORDER BY 1")],
         "loras": [(r["lora"], short(r["lora"])) for r in db.query(
             "SELECT DISTINCT lora FROM tasks WHERE lora!='' ORDER BY 1")],
+        "cats": [r["category"] for r in db.query(
+            "SELECT DISTINCT category FROM tasks WHERE category!='' ORDER BY 1")],
+        "batches": [r["batch"] for r in db.query(
+            "SELECT DISTINCT batch FROM tasks WHERE batch!='' ORDER BY 1 DESC")],
     }
     filt = {k: v.strip() for k, v in request.args.items() if k != "page" and v.strip()}
     qs = urlencode(filt)
@@ -335,7 +340,7 @@ def api_gallery_image_params(img_id):
     """单图的完整参数(sheet 展开时按需拉取,切换图片后刷新)。"""
     row = db.query_one(
         "SELECT t.workflow_name, t.model, t.lora, t.prompt_text, t.seed, "
-        "t.params_json, t.created_at AS task_created "
+        "t.category, t.batch, t.params_json, t.created_at AS task_created "
         "FROM images i JOIN tasks t ON t.id=i.task_id WHERE i.id=?", (img_id,))
     if not row:
         return err("图片不存在", 404)
@@ -344,6 +349,8 @@ def api_gallery_image_params(img_id):
             "lora": row["lora"],
             "prompt_text": row["prompt_text"],
             "seed": row["seed"],
+            "category": row["category"],
+            "batch": row["batch"],
             "created_at": row["task_created"],
             "params": json.loads(row["params_json"] or "[]")}
 
@@ -353,7 +360,8 @@ def page_gallery_detail(img_id):
     where, args, _cur = _gallery_filter()
     row = db.query_one(
         "SELECT i.*, t.workflow_id, t.workflow_name, t.prompt_text, t.seed, t.params_json, "
-        "t.model, t.lora, t.status, t.created_at AS task_created, t.count "
+        "t.model, t.lora, t.status, t.category, t.batch, "
+        "t.created_at AS task_created, t.count "
         "FROM images i JOIN tasks t ON t.id=i.task_id WHERE i.id=?", (img_id,))
     if not row:
         return "图片不存在(可能已被删除,或 ComfyUI 输出文件已清理)", 404
@@ -391,7 +399,7 @@ def page_gallery_detail(img_id):
 
     # 筛选集全量邻图(按时间序),前端做 AJAX 切换与静默预加载
     rows = db.query(
-        f"SELECT i.id, i.filename, i.subfolder, i.type, t.workflow_id, t.workflow_name, "
+        f"SELECT i.id, i.filename, i.subfolder, i.type, i.fav, t.workflow_id, t.workflow_name, "
         f"t.model, t.prompt_text, t.created_at AS task_created "
         f"FROM images i JOIN tasks t ON t.id=i.task_id {where} "
         f"ORDER BY i.id DESC LIMIT 400",
@@ -410,20 +418,7 @@ def page_gallery_detail(img_id):
             "wf": r["workflow_name"],
             "m": re.sub(r"^.*[\\/]", "", r["model"] or ""),
             "ts": r["task_created"],
-        })
-    neighbors, cur_idx = [], -1
-    for r in rows:
-        if r["id"] == img_id:
-            cur_idx = len(neighbors)
-        prompt = (r["prompt_text"] or "").strip()
-        neighbors.append({
-            "id": r["id"],
-            "url": image_url(r["filename"], r["subfolder"], r["type"]),
-            "thumb": image_url(r["filename"], r["subfolder"], r["type"], preview="webp;jpeg;70"),
-            "prompt": prompt[:120],
-            "wf": r["workflow_name"],
-            "m": re.sub(r"^.*[\\/]", "", r["model"] or ""),
-            "ts": r["task_created"],
+            "f": bool(r["fav"]),
         })
     return render_template("gallery_detail.html", item=item, qs=_detail_qs(),
                            neighbors=neighbors, idx=cur_idx, active="gallery")
@@ -1498,6 +1493,44 @@ def api_gallery_delete(img_id):
         return err("图片不存在", 404)
     db.execute("DELETE FROM images WHERE id=?", (img_id,))
     return {"ok": True}
+
+
+@app.post("/api/gallery/image/<int:img_id>/fav")
+def api_gallery_fav(img_id):
+    """收藏/取消收藏(切换状态)。"""
+    row = db.query_one("SELECT fav FROM images WHERE id=?", (img_id,))
+    if not row:
+        return err("图片不存在", 404)
+    fav = 0 if row["fav"] else 1
+    db.execute("UPDATE images SET fav=? WHERE id=?", (fav, img_id))
+    return {"ok": True, "fav": bool(fav)}
+
+
+@app.get("/favorites")
+def page_favorites():
+    """收藏页:与画廊同款瀑布流,只看收藏图片。"""
+    try:
+        page = max(1, int(request.args.get("page", 1)))
+    except ValueError:
+        page = 1
+    total = db.query_one(
+        "SELECT COUNT(*) AS n FROM images i JOIN tasks t ON t.id=i.task_id WHERE i.fav=1")["n"]
+    pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+    page = min(page, pages)
+    rows = db.query(
+        "SELECT i.id, i.filename, i.subfolder, i.type, i.fav, t.workflow_name, t.model, "
+        "t.prompt_text, t.category, t.batch, t.created_at AS task_created, i.created_at AS img_created "
+        "FROM images i JOIN tasks t ON t.id=i.task_id WHERE i.fav=1 "
+        "ORDER BY i.id DESC LIMIT ? OFFSET ?",
+        (PAGE_SIZE, (page - 1) * PAGE_SIZE))
+    items = []
+    for r in rows:
+        it = dict(r)
+        it["thumb"] = image_url(r["filename"], r["subfolder"], r["type"], preview="webp;jpeg;70")
+        items.append(it)
+    qs = ""
+    return render_template("favorites.html", items=items, page=page, pages=pages,
+                           total=total, qs=qs, active="favorites")
 
 
 @app.get("/healthz")

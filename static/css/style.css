@@ -112,6 +112,15 @@ details.adv[open]>summary::before{transform:rotate(90deg)}
 .masonry .gitem:hover{border-color:#c9cfdd}
 .masonry .gitem img{width:100%;height:auto;display:block}
 .masonry .gitem .gmeta{padding:.35rem .5rem;font-size:.7rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-top:1px solid var(--line)}
+/* 收藏角标:卡片右上角悬浮星标 */
+.fav-btn{position:absolute;top:.35rem;right:.35rem;z-index:2;width:1.7rem;height:1.7rem;
+  display:flex;align-items:center;justify-content:center;border:none;cursor:pointer;
+  font-size:.95rem;line-height:1;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.5);
+  background:rgba(20,22,30,.35);border-radius:999px;padding:0}
+.fav-btn:hover{background:rgba(20,22,30,.6)}
+.fav-btn.on{color:#ffd75e}
+/* 详情页顶栏收藏星标点亮态 */
+.vchip.on{color:#ffd75e}
 
 /* Civitai 搜索结果网格:方形封面卡片 */
 .civ-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:.6rem}

@@ -5,6 +5,8 @@
   <div class="v-top">
     <a class="vchip" href="/gallery{% if qs %}?{{ qs }}{% endif %}">‹ 画廊</a>
     <span class="vchip v-count" id="posEl">{{ idx + 1 }}/{{ neighbors|length }}</span>
+    <button class="vchip v-btn{{ ' on' if item.fav }}" id="btnFav" type="button"
+      title="{{ '取消收藏' if item.fav else '收藏' }}">{{ '★' if item.fav else '☆' }}</button>
     <button class="vchip v-btn" id="btnBg" type="button" title="切换背景色">◐</button>
   </div>
 
@@ -105,6 +107,8 @@
       }
       const rows = [];
       rows.push(['工作流', esc(d.workflow_name)]);
+      if (d.category) rows.push(['画面类型', esc(d.category)]);
+      if (d.batch) rows.push(['批次主题', esc(d.batch)]);
       if (d.model) rows.push(['模型', esc(d.model)]);
       if (d.lora) rows.push(['LoRA', esc(d.lora)]);
       rows.push(['生成时间', esc(d.created_at)]);
@@ -144,6 +148,26 @@
     } else { const d = await r.json().catch(() => ({})); alert(d.error || r.status); }
   });
 
+  /* 收藏:星标跟随当前图片,点击切换 */
+  const btnFav = document.getElementById('btnFav');
+  function syncFav() {
+    const it = NEIGHBORS[cur];
+    if (!it) return;
+    btnFav.textContent = it.f ? '★' : '☆';
+    btnFav.title = it.f ? '取消收藏' : '收藏';
+    btnFav.classList.toggle('on', !!it.f);
+  }
+  btnFav.addEventListener('click', async () => {
+    const it = NEIGHBORS[cur];
+    if (!it) return;
+    const r = await fetch(`/api/gallery/image/${it.id}/fav`, { method: 'POST' });
+    if (!r.ok) return;
+    const d = await r.json();
+    it.f = d.fav;
+    syncFav();
+    toast(d.fav ? '已收藏' : '已取消收藏');
+  });
+
   /* AJAX 切换:带方向动画,地址栏同步,无需整页刷新 */
   let switching = false;
   function goTo(i, anim, force) {
@@ -165,6 +189,7 @@
     document.getElementById('sMeta').textContent =
       [it.wf, it.m, it.ts].filter(Boolean).join(' · ');
     syncArrows();
+    syncFav();
     history.replaceState(null, '', `/gallery/image/${it.id}` + (qs ? '?' + qs : ''));
     renderSheetBody(it);
     preload();
@@ -297,6 +322,7 @@
   });
 
   syncArrows();
+  syncFav();
   preload();
 })();
 </script>

@@ -53,12 +53,12 @@ SPR_ANCHOR = ("standing, full body, white background, simple background, "
 SCENE_ANCHOR = "in scene, detailed environment background, cinematic lighting, masterpiece, best quality"
 ICON_ANCHOR = "game item illustration, single object, floating, transparent simple background, glowing, detailed, masterpiece"
 
-# 任务类型 -> (管线, 宽, 高)
+# 任务类型 -> (管线, 宽, 高, 画廊筛选用的类型标签)
 TYPE_LAYOUT = {
-    "character": ("anima", 832, 1216),
-    "icon": ("anima", 832, 832),
-    "scene": ("anima", 1216, 832),
-    "bg": ("zimage", 1216, 832),
+    "character": ("anima", 832, 1216, "立绘"),
+    "icon": ("anima", 832, 832, "图标"),
+    "scene": ("anima", 1216, 832, "场景"),
+    "bg": ("zimage", 1216, 832, "背景"),
 }
 
 
@@ -154,10 +154,11 @@ def refine(body, llm_chat):
             for ch in data["characters"][:count]:
                 base = f"{ch.get('look', '')}, {ch.get('outfit') or 'elegant outfit'}"
                 tasks.append({"name": f"{ch.get('cn', '角色')} · 立绘", "pipeline": "anima",
-                              "w": 832, "h": 1216, "prompt": f"{base}, {SPR_ANCHOR}", "neg": NEG_BASE})
+                              "w": 832, "h": 1216, "category": "立绘",
+                              "prompt": f"{base}, {SPR_ANCHOR}", "neg": NEG_BASE})
                 for sc in (ch.get("scenes") or [])[:6]:
                     tasks.append({"name": f"{ch.get('cn', '角色')} · {sc.get('cn', '场景')}",
-                                  "pipeline": "anima", "w": 1216, "h": 832,
+                                  "pipeline": "anima", "w": 1216, "h": 832, "category": "场景",
                                   "prompt": f"{base}, {sc.get('desc', '')}, {SCENE_ANCHOR}", "neg": NEG_BASE})
             break
         if mode == "free" and data.get("shots"):
@@ -165,7 +166,7 @@ def refine(body, llm_chat):
                 t = shot.get("type", "scene")
                 if t not in TYPE_LAYOUT:
                     t = "scene"
-                pipe, w, h = TYPE_LAYOUT[t]
+                pipe, w, h, cat = TYPE_LAYOUT[t]
                 desc = shot.get("desc", "")
                 if pipe == "zimage":
                     pos = desc
@@ -175,13 +176,14 @@ def refine(body, llm_chat):
                     pos = f"{desc}, {SPR_ANCHOR}"
                 else:
                     pos = f"{desc}, {SCENE_ANCHOR}"
-                tasks.append({"name": shot.get("cn", "画面"), "pipeline": pipe,
+                tasks.append({"name": shot.get("cn", "画面"), "pipeline": pipe, "category": cat,
                               "w": w, "h": h, "pos_prompt": desc, "prompt": pos, "neg": NEG_BASE})
             break
     if not tasks:
         raise ValueError("AI 三次都未返回有效任务清单,请重试或换个说法")
     for i, t in enumerate(tasks):
         t["seed"] = (seed + i) % (2 ** 31)
+        t["batch"] = theme[:60]  # 批次主题,画廊筛选维度
         # 用户固定提示词模板:positive 作前缀,negative 叠加到基础负面词
         if tpl_pos:
             t["prompt"] = f"{tpl_pos}, {t['prompt']}"
@@ -260,10 +262,10 @@ def free_vram():
 
 def _insert_task(prompt_id, t):
     cur = db.execute(
-        "INSERT INTO tasks(prompt_id, workflow_name, prompt_text, seed, model, "
-        "params_json, status, count) VALUES(?,?,?,?,?,?,'queued',1)",
+        "INSERT INTO tasks(prompt_id, workflow_name, prompt_text, seed, model, batch, category, "
+        "params_json, status, count) VALUES(?,?,?,?,?,?,?,?, 'queued',1)",
         (prompt_id, BATCH_WF_NAME, t.get("pos_prompt") or t["prompt"], t["seed"],
-         PIPELINES[t["pipeline"]]["model"],
+         PIPELINES[t["pipeline"]]["model"], t.get("batch", ""), t.get("category", ""),
          json.dumps([{"label": "尺寸", "value": f"{t['w']}x{t['h']}"},
                      {"label": "提示词", "value": t["prompt"]}], ensure_ascii=False)))
     return cur.lastrowid
@@ -314,6 +316,8 @@ def _sanitize_tasks(raw):
             "prompt": prompt[:2000],
             "neg": str(t.get("neg") or NEG_BASE)[:1000],
             "seed": seed % (2 ** 32),
+            "batch": str(t.get("batch") or "")[:60],
+            "category": str(t.get("category") or "")[:10],
         })
     if not out:
         raise ValueError("没有有效任务(缺提示词)")

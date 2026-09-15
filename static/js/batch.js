@@ -188,6 +188,7 @@
     const payload = tasks.map(t => ({
       name: t.name, pipeline: t.pipeline, w: t.w, h: t.h,
       pos_prompt: t.pos_prompt || '', prompt: t.prompt, neg: t.neg,
+      batch: t.batch || '', category: t.category || '',
       seed: t.seed == null ? null : parseInt(t.seed, 10) || 0,
     }));
     try {

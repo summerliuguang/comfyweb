@@ -26,26 +26,44 @@
       <option value="{{ l }}" {{ 'selected' if cur.get('lora') == l }}>{{ label }}</option>
       {% endfor %}
     </select>
+    {% if opts.cats %}
+    <select class="select is-small" name="cat" title="画面类型">
+      <option value="">全部类型</option>
+      {% for c in opts.cats %}
+      <option value="{{ c }}" {{ 'selected' if cur.get('cat') == c }}>{{ c }}</option>
+      {% endfor %}
+    </select>
+    {% endif %}
+    {% if opts.batches %}
+    <select class="select is-small" name="batch" title="批次主题">
+      <option value="">全部批次</option>
+      {% for b in opts.batches %}
+      <option value="{{ b }}" {{ 'selected' if cur.get('batch') == b }}>{{ b }}</option>
+      {% endfor %}
+    </select>
+    {% endif %}
     <select class="select is-small" name="range">
       {% for k, v in ranges.items() %}
       <option value="{{ k }}" {{ 'selected' if cur.get('range', 'all') == k }}>{{ v }}</option>
       {% endfor %}
     </select>
     <button class="button is-small is-link" type="submit">筛选</button>
-    {% if q or cur.get('wf') or cur.get('model') or cur.get('lora') or cur.get('range') in ('today', '7d', '30d') %}
+    {% if q or cur.get('wf') or cur.get('model') or cur.get('lora') or cur.get('cat') or cur.get('batch') or cur.get('range') in ('today', '7d', '30d') %}
     <a class="button is-small is-light" href="/gallery">清除</a>
     {% endif %}
   </form>
 
   {% if not items %}
   <div class="empty">
-    {% if q or cur.get('wf') or cur.get('model') or cur.get('lora') %}没有符合条件的图片。{% else %}还没有生成过图片。{% endif %}
+    {% if q or cur.get('wf') or cur.get('model') or cur.get('lora') or cur.get('cat') or cur.get('batch') %}没有符合条件的图片。{% else %}还没有生成过图片。{% endif %}
   </div>
   {% else %}
   <div class="masonry">
     {% for it in items %}
     <a class="gitem" href="/gallery/image/{{ it.id }}{% if qs %}?{{ qs }}{% endif %}">
       <img src="{{ it.thumb }}" loading="lazy" alt="生成图片">
+      <button class="fav-btn{{ ' on' if it.fav }}" type="button" data-fav="{{ it.id }}"
+        title="{{ '取消收藏' if it.fav else '收藏' }}">{{ '★' if it.fav else '☆' }}</button>
       <div class="gmeta" title="{{ it.prompt_text }}">{{ it.prompt_text or it.workflow_name or '(无提示词)' }}</div>
     </a>
     {% endfor %}
@@ -62,6 +80,20 @@
 {% endblock %}
 {% block scripts %}
 {% if items %}
+<script>
+/* 收藏切换:事件委托(卡片是 <a>,点星标要拦住跳转) */
+document.querySelector('.masonry').addEventListener('click', async (e) => {
+  const btn = e.target.closest('.fav-btn');
+  if (!btn) return;
+  e.preventDefault();
+  const r = await fetch(`/api/gallery/image/${btn.dataset.fav}/fav`, { method: 'POST' });
+  if (!r.ok) return;
+  const d = await r.json();
+  btn.classList.toggle('on', d.fav);
+  btn.textContent = d.fav ? '★' : '☆';
+  btn.title = d.fav ? '取消收藏' : '收藏';
+});
+</script>
 <script>
 /* 瀑布流:按 DOM 顺序(新→旧)放进最矮的一列 → 视觉上从左往右阅读;
    图片加载后按真实比例重排,窗口缩放自适应 */

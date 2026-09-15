@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}收藏 - ComfyWeb{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="title is-4">收藏 <span class="tag is-light">{{ total }} 张</span></h1>
+  <a class="button is-small" href="/gallery">去画廊</a>
+</div>
+
+<div class="panel">
+  {% if not items %}
+  <div class="empty">还没有收藏。在画廊或详情页点 ☆ 收藏图片。</div>
+  {% else %}
+  <div class="masonry">
+    {% for it in items %}
+    <a class="gitem" href="/gallery/image/{{ it.id }}">
+      <img src="{{ it.thumb }}" loading="lazy" alt="收藏图片">
+      <button class="fav-btn on" type="button" data-fav="{{ it.id }}" title="取消收藏">★</button>
+      <div class="gmeta" title="{{ it.prompt_text }}">{{ it.prompt_text or it.workflow_name or '(无提示词)' }}</div>
+    </a>
+    {% endfor %}
+  </div>
+  {% if pages > 1 %}
+  <div class="pager">
+    {% if page > 1 %}<a class="button is-small" href="/favorites?page={{ page - 1 }}">上一页</a>{% endif %}
+    <span>第 {{ page }} / {{ pages }} 页</span>
+    {% if page < pages %}<a class="button is-small" href="/favorites?page={{ page + 1 }}">下一页</a>{% endif %}
+  </div>
+  {% endif %}
+  {% endif %}
+</div>
+{% endblock %}
+{% block scripts %}
+{% if items %}
+<script>
+/* 取消收藏后把卡片淡出移除,瀑布流随窗口事件自然不会重排——直接重算高度 */
+document.querySelector('.masonry').addEventListener('click', async (e) => {
+  const btn = e.target.closest('.fav-btn');
+  if (!btn) return;
+  e.preventDefault();
+  const r = await fetch(`/api/gallery/image/${btn.dataset.fav}/fav`, { method: 'POST' });
+  if (!r.ok) return;
+  const d = await r.json();
+  if (!d.fav) {
+    const card = btn.closest('.gitem');
+    card.style.transition = 'opacity .25s';
+    card.style.opacity = '0';
+    setTimeout(() => {
+      card.remove();
+      document.dispatchEvent(new Event('resize'));  // 触发瀑布流重排
+    }, 260);
+  }
+});
+</script>
+<script>
+/* 瀑布流:按 DOM 顺序(新→旧)放进最矮的一列 → 视觉上从左往右阅读;
+   图片加载后按真实比例重排,窗口缩放自适应 */
+(function () {
+  const wrap = document.querySelector('.masonry');
+  const items = Array.from(wrap.children);
+  const GAP = 10;
+  let timer = null;
+
+  function colCount() {
+    const w = wrap.clientWidth;
+    return w < 560 ? 2 : w < 900 ? 3 : 4;
+  }
+
+  function layout() {
+    if (!wrap.children.length) { wrap.style.height = '0px'; return; }
+    const cols = colCount();
+    const colW = Math.floor((wrap.clientWidth - GAP * (cols - 1)) / cols);
+    const heights = Array(cols).fill(0);
+    for (const it of wrap.children) {
+      it.style.width = colW + 'px';
+      const img = it.querySelector('img');
+      const ih = (img.complete && img.naturalWidth)
+        ? colW * img.naturalHeight / img.naturalWidth
+        : colW * 1.33;                       // 未加载完先按 3:4 占位
+      const cap = it.querySelector('.gmeta');
+      const h = ih + (cap ? cap.offsetHeight : 26);
+      const c = heights.indexOf(Math.min(...heights));
+      it.style.transform = `translate(${c * (colW + GAP)}px, ${heights[c]}px)`;
+      heights[c] += Math.round(h) + GAP;
+    }
+    wrap.style.height = Math.max(...heights) + 'px';
+  }
+
+  for (const it of items) {
+    it.querySelector('img').addEventListener('load', () => {
+      clearTimeout(timer);
+      timer = setTimeout(layout, 60);        // 批量加载完只重排一次
+    });
+  }
+  addEventListener('resize', () => {
+    clearTimeout(timer);
+    timer = setTimeout(layout, 80);
+  });
+  layout();
+})();
+</script>
+{% endif %}
+{% endblock %}

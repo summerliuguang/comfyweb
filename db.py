@@ -151,6 +151,15 @@ def init_db():
         db.execute("ALTER TABLE tasks ADD COLUMN model TEXT NOT NULL DEFAULT ''")
     if "lora" not in tcols:
         db.execute("ALTER TABLE tasks ADD COLUMN lora TEXT NOT NULL DEFAULT ''")
+    # 批量生成的归类维度:批次主题与画面类型(画廊筛选用)
+    if "batch" not in tcols:
+        db.execute("ALTER TABLE tasks ADD COLUMN batch TEXT NOT NULL DEFAULT ''")
+    if "category" not in tcols:
+        db.execute("ALTER TABLE tasks ADD COLUMN category TEXT NOT NULL DEFAULT ''")
+    # 画廊收藏
+    icols = {r[1] for r in db.execute("PRAGMA table_info(images)")}
+    if "fav" not in icols:
+        db.execute("ALTER TABLE images ADD COLUMN fav INTEGER NOT NULL DEFAULT 0")
     _backfill_task_models(db)
     # filename 仅为迁移保留,统一按行 id 命名
     db.execute("UPDATE workflows SET filename='wf_'||id||'.json' WHERE filename=''")
