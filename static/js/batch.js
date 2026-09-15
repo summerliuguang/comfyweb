@@ -104,7 +104,7 @@
     name.dataset.idx = i; name.dataset.k = 'name';
     const del = document.createElement('button');
     del.className = 'button is-small';
-    del.textContent = '✕'; del.title = '删除此任务';
+    del.textContent = '×'; del.title = '删除此任务';
     del.addEventListener('click', () => { tasks.splice(i, 1); renderTasks(); });
     row1.appendChild(name); row1.appendChild(del);
     d.appendChild(row1);

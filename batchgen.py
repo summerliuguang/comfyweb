@@ -209,7 +209,7 @@ def template_save(d):
         "INSERT INTO batch_templates(name, positive, negative, updated_at) VALUES(?,?,?,datetime('now','localtime')) "
         "ON CONFLICT(name) DO UPDATE SET positive=excluded.positive, negative=excluded.negative, "
         "updated_at=datetime('now','localtime')",
-        (name, (d.get("positive") or "").strip(), (d.get("negative") or "").strip()))
+        (name, (d.get("positive") or "").strip()[:2000], (d.get("negative") or "").strip()[:1000]))
     return templates_all()
 
 
@@ -384,13 +384,17 @@ def engine(tasks):
 
 
 def start(raw_tasks):
-    if STATE["running"]:
-        raise ValueError("有批次正在运行")
-    tasks = _sanitize_tasks(raw_tasks)
+    with _state_lock:
+        if STATE["running"]:
+            raise ValueError("有批次正在运行")
+        STATE["running"] = True  # 先占位再启动线程,防并发双击同时起两个批次
     try:
+        tasks = _sanitize_tasks(raw_tasks)
         client.queue()  # 提交前确认 ComfyUI 可达
-    except ComfyError as e:
-        raise ValueError(f"ComfyUI 不可达: {e}")
+    except Exception:
+        with _state_lock:
+            STATE["running"] = False
+        raise
     threading.Thread(target=engine, args=(tasks,), daemon=True).start()
     return len(tasks)
 

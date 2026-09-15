@@ -8,13 +8,13 @@
 
 <div class="panel">
   {% if not items %}
-  <div class="empty">还没有收藏。在画廊或详情页点 ☆ 收藏图片。</div>
+  <div class="empty">还没有收藏。在画廊或详情页点星标收藏图片。</div>
   {% else %}
   <div class="masonry">
     {% for it in items %}
     <a class="gitem" href="/gallery/image/{{ it.id }}">
       <img src="{{ it.thumb }}" loading="lazy" alt="收藏图片">
-      <button class="fav-btn on" type="button" data-fav="{{ it.id }}" title="取消收藏">★</button>
+      <button class="fav-btn on" type="button" data-fav="{{ it.id }}" title="取消收藏"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" stroke="none" aria-hidden="true"><path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.6 9.7l5.8-.8z"/></svg></button>
       <div class="gmeta" title="{{ it.prompt_text }}">{{ it.prompt_text or it.workflow_name or '(无提示词)' }}</div>
     </a>
     {% endfor %}

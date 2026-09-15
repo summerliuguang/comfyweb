@@ -86,7 +86,9 @@ class Favorites(unittest.TestCase):
             # 详情页星标点亮
             detail = client_app.get(f"/gallery/image/{img}").get_data(as_text=True)
             self.assertIn('id="btnFav"', detail)
-            self.assertIn("★", detail)
+            # 星标为内联 SVG(规范禁 emoji 字符),点亮态是填充色版本
+            self.assertIn('id="btnFav"', detail)
+            self.assertIn('fill="currentColor"', detail)
             # 再点一次取消
             r = client_app.post(f"/api/gallery/image/{img}/fav")
             self.assertFalse(r.get_json()["fav"])

@@ -63,7 +63,7 @@
     <a class="gitem" href="/gallery/image/{{ it.id }}{% if qs %}?{{ qs }}{% endif %}">
       <img src="{{ it.thumb }}" loading="lazy" alt="生成图片">
       <button class="fav-btn{{ ' on' if it.fav }}" type="button" data-fav="{{ it.id }}"
-        title="{{ '取消收藏' if it.fav else '收藏' }}">{{ '★' if it.fav else '☆' }}</button>
+        title="{{ '取消收藏' if it.fav else '收藏' }}">{% if it.fav %}<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" stroke="none" aria-hidden="true"><path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.6 9.7l5.8-.8z"/></svg>{% else %}<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.6 9.7l5.8-.8z"/></svg>{% endif %}</button>
       <div class="gmeta" title="{{ it.prompt_text }}">{{ it.prompt_text or it.workflow_name or '(无提示词)' }}</div>
     </a>
     {% endfor %}
@@ -90,7 +90,7 @@ document.querySelector('.masonry').addEventListener('click', async (e) => {
   if (!r.ok) return;
   const d = await r.json();
   btn.classList.toggle('on', d.fav);
-  btn.textContent = d.fav ? '★' : '☆';
+  btn.innerHTML = d.fav ? "<svg viewBox=\"0 0 24 24\" width=\"14\" height=\"14\" fill=\"currentColor\" stroke=\"none\" aria-hidden=\"true\"><path d=\"M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.6 9.7l5.8-.8z\"/></svg>" : "<svg viewBox=\"0 0 24 24\" width=\"14\" height=\"14\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.6 9.7l5.8-.8z\"/></svg>";
   btn.title = d.fav ? '取消收藏' : '收藏';
 });
 </script>
