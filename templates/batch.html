@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}批量生成 - ComfyWeb{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="title is-4">批量生成</h1>
+  <a class="button is-small" href="/gallery?wf=批量生成">画廊中查看</a>
+</div>
+
+<div class="panel">
+  <div class="field">
+    <label class="label">需求模式</label>
+    <div class="control">
+      <div class="select is-fullwidth">
+        <select id="modeSelect">
+          <option value="free">自由画面 — AI 按主题设计一批人物/场景/背景/图标</option>
+          <option value="cast">角色套图 — 每位角色 1 张立绘 + 6 个剧情场景</option>
+        </select>
+      </div>
+    </div>
+  </div>
+  <div class="field">
+    <label class="label">主题描述</label>
+    <div class="control">
+      <textarea class="textarea" id="themeInput" rows="3"
+        placeholder="例:修仙题材游戏美术,包含主角、门派场景、丹药法宝图标"></textarea>
+    </div>
+  </div>
+  <div class="field">
+    <label class="label">数量</label>
+    <input class="input" id="countInput" type="number" min="1" max="60" value="8" inputmode="numeric">
+    <p class="hint">自由画面 = 画面数;角色套图 = 角色数(每人 7 张)。单批最多 60 张。</p>
+  </div>
+  <div class="field">
+    <label class="label">风格补充(可选)</label>
+    <input class="input" id="styleInput" type="text" placeholder="例:中国风水墨、赛博朋克霓虹">
+  </div>
+  <button class="button is-link is-fullwidth is-medium" id="btnRefine">AI 细化提示词</button>
+  <p class="task-err" id="refineError" hidden></p>
+  <p class="hint">AI 会按管线内置风格生成提示词:人物/图标用 anima_turbo(英文标签),纯背景用 z-image-turbo(中文自然句)。</p>
+</div>
+
+<div class="panel">
+  <h2 class="title is-5">提示词模板</h2>
+  <div class="field">
+    <div class="field has-addons" style="margin-bottom:.4rem">
+      <div class="control is-expanded">
+        <div class="select is-fullwidth">
+          <select id="tplSelect"><option value="">— 选择已保存模板 —</option></select>
+        </div>
+      </div>
+      <div class="control">
+        <button class="button" id="btnTplDelete" title="删除所选模板">删除</button>
+      </div>
+    </div>
+    <p class="hint">正向模板会拼在每张图提示词最前,负向模板叠加到基础负面词;随「AI 细化」一起生效。</p>
+  </div>
+  <div class="field">
+    <label class="label">模板名称</label>
+    <input class="input" id="tplName" type="text" placeholder="例:凡人修仙传通用">
+  </div>
+  <div class="field">
+    <label class="label">正向提示词</label>
+    <textarea class="textarea" id="tplPos" rows="2" placeholder="例:chinese xianxia style, detailed"></textarea>
+  </div>
+  <div class="field">
+    <label class="label">负向提示词</label>
+    <textarea class="textarea" id="tplNeg" rows="2" placeholder="例:crown, western, sci-fi"></textarea>
+  </div>
+  <button class="button is-fullwidth" id="btnTplSave">保存模板</button>
+  <p class="task-err" id="tplError" hidden></p>
+</div>
+
+<div class="panel" id="tasksPanel" hidden>
+  <div class="page-head" style="margin-bottom:.6rem">
+    <h2 class="title is-5">任务清单(<span id="taskCount">0</span> 张)</h2>
+    <button class="button is-small" id="btnClear">清空</button>
+  </div>
+  <div id="taskList"></div>
+  <button class="button is-link is-fullwidth is-medium" id="btnStart">开始生成</button>
+  <p class="task-err" id="startError" hidden></p>
+</div>
+
+<div class="panel" id="progPanel" hidden>
+  <h2 class="title is-5">生成进度</h2>
+  <p class="task-meta" id="progLine">—</p>
+  <progress class="progress is-link is-small" id="progBar" max="100" value="0"></progress>
+  <p class="task-prompt" id="progCurrent"></p>
+  <pre class="hint" id="progLog" style="white-space:pre-wrap;max-height:16rem;overflow:auto"></pre>
+  <button class="button is-danger is-light is-fullwidth" id="btnStop">停止批次</button>
+  <p class="hint" id="galleryLink" hidden>批次结束后到 <a href="/gallery?wf=批量生成">画廊 → 批量生成</a> 查看,可按模型筛选。</p>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/batch.js"></script>
+{% endblock %}

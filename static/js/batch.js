@@ -1,0 +1,244 @@
+/* 批量生成页:AI 细化任务清单、清单编辑、模板 CRUD、进度轮询 */
+(function () {
+  const $ = id => document.getElementById(id);
+  const PIPE_LABEL = { anima: 'anima(人物/图标)', zimage: 'z-image(背景)' };
+
+  let tasks = [];          // 待生成清单(可编辑)
+  let pollTimer = null;
+  let wasRunning = false;
+
+  async function toJson(r) {
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || r.status);
+    return data;
+  }
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g,
+      c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  /* ---------- 提示词模板 ---------- */
+
+  async function loadTemplates() {
+    let d;
+    try { d = await toJson(await fetch('/api/batch/templates')); } catch (e) { return; }
+    const sel = $('tplSelect');
+    sel.innerHTML = '<option value="">— 选择已保存模板 —</option>' +
+      d.templates.map(t => `<option value="${esc(t.name)}">${esc(t.name)}</option>`).join('');
+  }
+
+  $('tplSelect').addEventListener('change', () => {
+    const name = $('tplSelect').value;
+    if (!name) return;
+    // 从当前下拉项取内容需要再查一次;直接用全局最近一次列表缓存
+    const t = (window._batchTplCache || []).find(x => x.name === name);
+    if (t) { $('tplPos').value = t.positive || ''; $('tplNeg').value = t.negative || ''; }
+  });
+
+  $('btnTplSave').addEventListener('click', async () => {
+    const errBox = $('tplError');
+    errBox.hidden = true;
+    try {
+      const d = await toJson(await fetch('/api/batch/templates', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'save', name: $('tplName').value,
+          positive: $('tplPos').value, negative: $('tplNeg').value,
+        }),
+      }));
+      window._batchTplCache = d.templates;
+      await loadTemplates();
+      $('tplSelect').value = $('tplName').value.trim();
+    } catch (e) { errBox.textContent = e.message; errBox.hidden = false; }
+  });
+
+  $('btnTplDelete').addEventListener('click', async () => {
+    const name = $('tplSelect').value;
+    if (!name || !confirm(`删除模板「${name}」?`)) return;
+    try {
+      const d = await toJson(await fetch('/api/batch/templates', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete', name }),
+      }));
+      window._batchTplCache = d.templates;
+      await loadTemplates();
+    } catch (e) { alert(e.message); }
+  });
+
+  /* ---------- AI 细化 ---------- */
+
+  $('btnRefine').addEventListener('click', async () => {
+    const btn = $('btnRefine'), errBox = $('refineError');
+    errBox.hidden = true;
+    btn.classList.add('is-loading');
+    try {
+      const d = await toJson(await fetch('/api/batch/refine', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: $('modeSelect').value, theme: $('themeInput').value,
+          count: parseInt($('countInput').value, 10) || 8, style: $('styleInput').value,
+          template: { positive: $('tplPos').value, negative: $('tplNeg').value },
+        }),
+      }));
+      tasks = d.tasks;
+      renderTasks();
+      $('tasksPanel').hidden = false;
+      $('tasksPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch (e) {
+      errBox.textContent = e.message; errBox.hidden = false;
+    } finally { btn.classList.remove('is-loading'); }
+  });
+
+  /* ---------- 任务清单编辑 ---------- */
+
+  function taskCard(t, i) {
+    const d = document.createElement('div');
+    d.className = 'task-card';
+    const row1 = document.createElement('div');
+    row1.className = 'task-head';
+    const name = document.createElement('input');
+    name.className = 'input';
+    name.style.cssText = 'flex:1;font-size:.85rem;font-weight:600';
+    name.value = t.name;
+    name.dataset.idx = i; name.dataset.k = 'name';
+    const del = document.createElement('button');
+    del.className = 'button is-small';
+    del.textContent = '✕'; del.title = '删除此任务';
+    del.addEventListener('click', () => { tasks.splice(i, 1); renderTasks(); });
+    row1.appendChild(name); row1.appendChild(del);
+    d.appendChild(row1);
+
+    const row2 = document.createElement('div');
+    row2.className = 'seed-row';
+    row2.style.cssText = 'margin-top:.45rem;flex-wrap:wrap';
+    const mk = (k, val, w, type) => {
+      const inp = document.createElement('input');
+      inp.className = 'input';
+      inp.style.cssText = `width:${w};font-size:.78rem;padding:.3rem .45rem`;
+      inp.type = type || 'text';
+      inp.value = val;
+      inp.dataset.idx = i; inp.dataset.k = k;
+      return inp;
+    };
+    const pipe = document.createElement('select');
+    pipe.className = 'select';
+    pipe.style.cssText = 'font-size:.78rem;width:auto;flex:none';
+    pipe.innerHTML = Object.keys(PIPE_LABEL).map(k =>
+      `<option value="${k}"${k === t.pipeline ? ' selected' : ''}>${PIPE_LABEL[k]}</option>`).join('');
+    pipe.dataset.idx = i; pipe.dataset.k = 'pipeline';
+    row2.appendChild(pipe);
+    row2.appendChild(mk('w', t.w, '4.2rem', 'number'));
+    row2.appendChild(mk('h', t.h, '4.2rem', 'number'));
+    row2.appendChild(mk('seed', t.seed == null ? '' : t.seed, '7rem', 'text'));
+    d.appendChild(row2);
+
+    const prompt = document.createElement('textarea');
+    prompt.className = 'textarea';
+    prompt.style.cssText = 'font-size:.76rem;margin-top:.45rem';
+    prompt.rows = 2; prompt.value = t.prompt;
+    prompt.dataset.idx = i; prompt.dataset.k = 'prompt';
+    d.appendChild(prompt);
+
+    const neg = mk('neg', t.neg || '', '100%', 'text');
+    neg.style.marginTop = '.4rem';
+    neg.placeholder = '负面提示词';
+    d.appendChild(neg);
+    return d;
+  }
+
+  function renderTasks() {
+    const list = $('taskList');
+    $('taskCount').textContent = tasks.length;
+    if (!tasks.length) {
+      list.innerHTML = '<p class="empty">清单为空,先点「AI 细化提示词」。</p>';
+      return;
+    }
+    list.innerHTML = '';
+    tasks.forEach((t, i) => list.appendChild(taskCard(t, i)));
+    list.querySelectorAll('textarea').forEach(t => comfyAutosizeFit(t));
+  }
+
+  // 输入统一走事件委托,直接改 tasks 数组,不整卡重渲染
+  $('taskList').addEventListener('input', e => {
+    const el = e.target;
+    if (el.dataset.idx === undefined || !el.dataset.k) return;
+    const t = tasks[parseInt(el.dataset.idx, 10)];
+    if (!t) return;
+    let v = el.value;
+    if (el.dataset.k === 'w' || el.dataset.k === 'h') v = parseInt(v, 10) || 832;
+    else if (el.dataset.k === 'seed') v = v === '' ? null : (parseInt(v, 10) || 0);
+    t[el.dataset.k] = v;
+  });
+  $('taskList').addEventListener('change', e => {
+    const el = e.target;
+    if (el.dataset && el.dataset.idx !== undefined && el.dataset.k === 'pipeline') {
+      const t = tasks[parseInt(el.dataset.idx, 10)];
+      if (t) t.pipeline = el.value;
+    }
+  });
+
+  $('btnClear').addEventListener('click', () => { tasks = []; renderTasks(); });
+
+  /* ---------- 开始生成 + 进度轮询 ---------- */
+
+  $('btnStart').addEventListener('click', async () => {
+    const errBox = $('startError');
+    errBox.hidden = true;
+    const payload = tasks.map(t => ({
+      name: t.name, pipeline: t.pipeline, w: t.w, h: t.h,
+      pos_prompt: t.pos_prompt || '', prompt: t.prompt, neg: t.neg,
+      seed: t.seed == null ? null : parseInt(t.seed, 10) || 0,
+    }));
+    try {
+      const d = await toJson(await fetch('/api/batch/start', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tasks: payload }),
+      }));
+      $('progPanel').hidden = false;
+      $('galleryLink').hidden = true;
+      $('progLog').textContent = '';
+      pollStatus();
+      if (!pollTimer) pollTimer = setInterval(pollStatus, 2000);
+      $('progPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch (e) { errBox.textContent = e.message; errBox.hidden = false; }
+  });
+
+  $('btnStop').addEventListener('click', async () => {
+    try { await toJson(await fetch('/api/batch/stop', { method: 'POST' })); } catch (e) {}
+  });
+
+  async function pollStatus() {
+    let s;
+    try { s = await toJson(await fetch('/api/batch/status')); } catch (e) { return; }
+    const pct = s.total ? Math.round(s.done / s.total * 100) : 0;
+    $('progBar').value = pct;
+    $('progLine').textContent = s.running
+      ? `进行中 ${s.done}/${s.total}(${pct}%)${s.temp ? ' · GPU ' + s.temp : ''}${s.err ? ' · 失败 ' + s.err : ''}`
+      : (s.finished ? `已结束:完成 ${s.done}/${s.total},失败 ${s.err}` : '空闲');
+    $('progCurrent').textContent = s.running && s.current ? '当前:' + s.current : '';
+    $('progLog').textContent = (s.log || []).join('\n');
+    $('progLog').scrollTop = $('progLog').scrollHeight;
+    if (wasRunning && !s.running) {
+      $('galleryLink').hidden = false;
+      clearInterval(pollTimer); pollTimer = null;
+      if (navigator.vibrate) navigator.vibrate([150, 80, 150]);
+    }
+    // 页面打开时批次已在跑:自动展开进度面板接着轮询
+    if (s.running && !pollTimer) {
+      $('progPanel').hidden = false;
+      pollTimer = setInterval(pollStatus, 2000);
+    }
+    wasRunning = s.running;
+  }
+
+  /* ---------- 初始化 ---------- */
+  (async () => {
+    try {
+      const d = await toJson(await fetch('/api/batch/templates'));
+      window._batchTplCache = d.templates;
+      await loadTemplates();
+    } catch (e) { /* 模板加载失败不阻塞页面 */ }
+    pollStatus();
+  })();
+})();

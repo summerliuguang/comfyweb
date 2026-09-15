@@ -16,6 +16,7 @@ import requests
 import db
 import civitai
 import workflow as wfmod
+import batchgen
 from comfy_client import ComfyError, client
 
 app = Flask(__name__)
@@ -1234,9 +1235,12 @@ def _litegate_chat(messages, max_tokens=2000, model=None):
     base, key = _litegate_cfg()
     if not key:
         raise ComfyError("未配置 LITEGATE_API_KEY(.env)")
+    insecure = os.environ.get("LITEGATE_INSECURE") == "1"  # 自签证书的内网网关
+    if insecure:
+        requests.packages.urllib3.disable_warnings()
     try:
         r = requests.post(
-            f"{base}/chat/completions", timeout=120,
+            f"{base}/chat/completions", timeout=120, verify=not insecure,
             headers={"Authorization": f"Bearer {key}",
                      "X-LiteGate-App": "comfyweb",
                      "Content-Type": "application/json"},
@@ -1253,7 +1257,8 @@ def _litegate_chat(messages, max_tokens=2000, model=None):
     if not txt:
         # deepseek-flash 是推理模型:思维链可能吃掉 max_tokens 导致正文为空
         raise ComfyError("AI 返回为空(思维链耗尽 token?)")
-    return txt
+    # 推理模型的思维链不属于正文,润色/翻译/细化都不该带出去
+    return re.sub(r"<think>[\s\S]*?</think>", "", txt).strip()
 
 
 # 对话用不上的模型(语音/向量/重排等)不在润色/翻译下拉中展示
@@ -1362,6 +1367,80 @@ def api_tags_search():
     hits = hits[:12]
     return {"tags": [{"name": r[0], "cat": _TAG_CATS.get(r[1], ""), "count": r[2]}
                      for r in hits]}
+
+
+# ---------- 批量生成(AI 细化任务清单 + 按模型分组引擎,见 batchgen.py) ----------
+
+@app.get("/batch")
+def page_batch():
+    return render_template("batch.html", active="batch")
+
+
+def _chat_json(messages, max_tokens=4000, model=None):
+    """LLM 调用 + 从回复中提取 JSON 对象(推理模型思维链已由 _litegate_chat 剥离)。"""
+    txt = _litegate_chat(messages, max_tokens=max_tokens, model=model)
+    m = re.search(r"\{[\s\S]*\}", txt)
+    if not m:
+        return None
+    try:
+        return json.loads(m.group(0))
+    except ValueError:
+        return None
+
+
+@app.post("/api/batch/refine")
+def api_batch_refine():
+    if batchgen.STATE["running"]:
+        return err("有批次正在运行,请等批次结束或先停止", 400)
+    d = request.get_json(silent=True) or {}
+    try:
+        return {"tasks": batchgen.refine(d, _chat_json)}
+    except ComfyError as e:
+        return err(e, 502)
+    except ValueError as e:
+        return err(e)
+
+
+@app.post("/api/batch/start")
+def api_batch_start():
+    d = request.get_json(silent=True) or {}
+    try:
+        total = batchgen.start(d.get("tasks"))
+    except (ValueError, ComfyError) as e:
+        return err(e)
+    return {"ok": True, "total": total}
+
+
+@app.get("/api/batch/status")
+def api_batch_status():
+    return batchgen.state()
+
+
+@app.post("/api/batch/stop")
+def api_batch_stop():
+    batchgen.stop()
+    return {"ok": True}
+
+
+@app.get("/api/batch/templates")
+def api_batch_templates():
+    return {"templates": batchgen.templates_all()}
+
+
+@app.post("/api/batch/templates")
+def api_batch_templates_post():
+    d = request.get_json(silent=True) or {}
+    action = d.get("action", "save")
+    try:
+        if action == "save":
+            tpls = batchgen.template_save(d)
+        elif action == "delete":
+            tpls = batchgen.template_delete((d.get("name") or "").strip())
+        else:
+            return err("未知 action")
+    except ValueError as e:
+        return err(e)
+    return {"ok": True, "templates": tpls}
 
 
 # ---------- 队列(设置页) ----------

@@ -81,6 +81,13 @@ CREATE TABLE IF NOT EXISTS civ_searches(
   next_cursor TEXT NOT NULL DEFAULT '',
   fetched_at REAL NOT NULL DEFAULT 0
 );
+-- 批量生成页的正/负提示词模板
+CREATE TABLE IF NOT EXISTS batch_templates(
+  name TEXT PRIMARY KEY,
+  positive TEXT NOT NULL DEFAULT '',
+  negative TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
 CREATE INDEX IF NOT EXISTS idx_images_task ON images(task_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at);
 """
