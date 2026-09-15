@@ -1233,9 +1233,11 @@ def _litegate_chat(messages, max_tokens=2000, model=None):
     insecure = os.environ.get("LITEGATE_INSECURE") == "1"  # 自签证书的内网网关
     if insecure:
         requests.packages.urllib3.disable_warnings()
+    # 大清单输出(批量细化 4000 tokens)在推理模型上要跑几分钟,按规模放宽超时
+    timeout = max(120, min(300, max_tokens // 10))
     try:
         r = requests.post(
-            f"{base}/chat/completions", timeout=120, verify=not insecure,
+            f"{base}/chat/completions", timeout=timeout, verify=not insecure,
             headers={"Authorization": f"Bearer {key}",
                      "X-LiteGate-App": "comfyweb",
                      "Content-Type": "application/json"},
