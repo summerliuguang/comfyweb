@@ -1581,4 +1581,6 @@ def remote_workflow_names():
 client.on_connect = warm_caches
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=int(os.environ.get("PORT", "5012")), threaded=True)
+    # 默认只监听本机(正式部署经 nginx 反代);局域网直连时设 HOST=0.0.0.0
+    app.run(host=os.environ.get("HOST", "127.0.0.1"),
+            port=int(os.environ.get("PORT", "5012")), threaded=True)
