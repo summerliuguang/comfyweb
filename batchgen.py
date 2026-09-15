@@ -10,12 +10,12 @@ import json
 import os
 import re
 import secrets
-import subprocess
 import threading
 import time
 
 import db
 from comfy_client import ComfyError, client
+import hoststats
 
 MAX_BATCH = 60
 BATCH_WF_NAME = "批量生成"
@@ -237,18 +237,24 @@ def log(msg):
 
 
 def gpu_temp_enabled():
-    """温度保护默认关:仅当本服务与 ComfyUI 同在 GPU 主机时有意义(.env 开启)。"""
+    """温度保护默认关:仅当能取到 GPU 温度(SSH 跨机或本机)时有意义(.env 开启)。"""
     return os.environ.get("BATCHGEN_GPU_TEMP") == "1"
 
 
 def gpu_temp():
-    try:
-        out = subprocess.run(
-            ["nvidia-smi", "--query-gpu=temperature.gpu", "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=10).stdout.strip()
-        return int(out.splitlines()[0])
-    except Exception:
-        return 0
+    """ComfyUI 主机的 GPU 温度:跨机走 SSH,同机走本机 nvidia-smi;取不到返回 0。"""
+    return hoststats.gpu_temp()
+
+
+def _update_temp_display():
+    st = hoststats.fetch()
+    if st.get("temp"):
+        txt = f"GPU {st['temp']}°C"
+        if st.get("util"):
+            txt += f" · 利用率 {st['util']}%"
+        with _state_lock:
+            STATE["temp"] = txt
+    return st.get("temp", 0) or 0
 
 
 def free_vram():
@@ -345,16 +351,12 @@ def engine(tasks):
                 free_vram()
             last_pipe = pipe_key
             if gpu_temp_enabled():
-                temp = gpu_temp()
-                with _state_lock:
-                    STATE["temp"] = f"{temp}°C" if temp else ""
+                temp = _update_temp_display()
                 while temp >= 72 and not STATE["stop"]:
                     wait_s = 180 if temp >= 78 else 60
                     log(f"GPU 温度 {temp}°C 偏高,休息 {wait_s}s")
                     time.sleep(wait_s)
-                    temp = gpu_temp()
-                    with _state_lock:
-                        STATE["temp"] = f"{temp}°C" if temp else ""
+                    temp = _update_temp_display()
             with _state_lock:
                 STATE["current"] = f"{t['name']} [{pipe_key}]"
             try:

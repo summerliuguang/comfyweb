@@ -1410,7 +1410,8 @@ def api_batch_start():
 
 @app.get("/api/batch/status")
 def api_batch_status():
-    return batchgen.state()
+    import hoststats
+    return {**batchgen.state(), "host": hoststats.fetch()}
 
 
 @app.post("/api/batch/stop")
@@ -1533,6 +1534,13 @@ def page_favorites():
     qs = ""
     return render_template("favorites.html", items=items, page=page, pages=pages,
                            total=total, qs=qs, active="favorites")
+
+
+@app.get("/api/host/stats")
+def api_host_stats():
+    """ComfyUI 主机的 GPU/系统状态(跨机:显存走 ComfyUI 接口,温度/利用率需 SSH)。"""
+    import hoststats
+    return hoststats.fetch()
 
 
 @app.get("/healthz")

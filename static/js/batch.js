@@ -215,7 +215,7 @@
     const pct = s.total ? Math.round(s.done / s.total * 100) : 0;
     $('progBar').value = pct;
     $('progLine').textContent = s.running
-      ? `进行中 ${s.done}/${s.total}(${pct}%)${s.temp ? ' · GPU ' + s.temp : ''}${s.err ? ' · 失败 ' + s.err : ''}`
+      ? `进行中 ${s.done}/${s.total}(${pct}%)${s.temp ? ' · ' + s.temp : ''}${s.err ? ' · 失败 ' + s.err : ''}`
       : (s.finished ? `已结束:完成 ${s.done}/${s.total},失败 ${s.err}` : '空闲');
     $('progCurrent').textContent = s.running && s.current ? '当前:' + s.current : '';
     $('progLog').textContent = (s.log || []).join('\n');

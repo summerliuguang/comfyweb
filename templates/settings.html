@@ -24,7 +24,11 @@
       <tr><td>ComfyUI 版本</td><td id="siVersion">--</td></tr>
       <tr><td>显卡</td><td id="siDevice">--</td></tr>
       <tr><td>显存占用</td><td id="siVram">--</td></tr>
+      <tr><td>GPU 温度</td><td id="siTemp">--</td></tr>
+      <tr><td>GPU 利用率</td><td id="siUtil">--</td></tr>
+      <tr><td>CPU 负载</td><td id="siCpu">--</td></tr>
     </table>
+    <p class="hint">温度/利用率跨机采集需在 GPU 主机开启 SSH,并在 .env 配 COMFY_SSH=user@主机(本机公钥已部署到对方后即生效)。</p>
   </div>
 </div>
 
@@ -195,6 +199,17 @@
       const btn = $('btnRefreshModels');
       btn.disabled = !ok;
       btn.title = ok ? '清空模型/LoRA 列表缓存,生成页下次打开即拉最新' : 'ComfyUI 未连接,无需刷新';
+    } catch (e) { /* 忽略 */ }
+    try {
+      const h = await api('/api/host/stats');
+      $('serverInfo').hidden = false;
+      $('siTemp').textContent = h.temp != null ? h.temp + '°C' : '--(跨机采集需 SSH)';
+      $('siUtil').textContent = h.util != null ? h.util + '%' : '--';
+      if (h.vram_total) {
+        $('siVram').textContent = `${(h.vram_used / 1024).toFixed(1)}GB / ${(h.vram_total / 1024).toFixed(1)}GB`;
+      }
+      $('siCpu').textContent = h.cpu_temp != null ? '温度 ' + h.cpu_temp + '°C'
+        : (h.cpu != null ? h.cpu + '%' : (h.load != null ? '负载 ' + h.load : '--'));
     } catch (e) { /* 忽略 */ }
   }
   loadWs();
