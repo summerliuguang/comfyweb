@@ -182,6 +182,23 @@ class ApiSmoke(unittest.TestCase):
             app_mod.remote_workflow_names = orig_fn
             app_mod._udwf_fail_at[0] = 0.0
 
+    def test_batch_default_model_prefers_free(self):
+        """批量细化默认模型应优先选免费模型(:free),没有免费的才退回网关默认。"""
+        import app as app_mod
+        orig_fetch, orig_cached = app_mod._fetch_ai_models, app_mod.cached
+        app_mod._fetch_ai_models = lambda b, k: [
+            "deepseek-flash", "mimo-v2.5",
+            "nvidia/nemotron-3-super-120b-a12b:free",
+            "nvidia/nemotron-3-ultra-550b-a55b:free"]
+        app_mod.cached = lambda key, ttl, fn: fn()  # 绕过缓存直接取
+        try:
+            self.assertEqual(app_mod._batch_default_model(),
+                             "nvidia/nemotron-3-super-120b-a12b:free")
+            app_mod._fetch_ai_models = lambda b, k: ["deepseek-flash", "mimo-v2.5"]
+            self.assertEqual(app_mod._batch_default_model(), "deepseek-flash")
+        finally:
+            app_mod._fetch_ai_models, app_mod.cached = orig_fetch, orig_cached
+
 
 if __name__ == "__main__":
     unittest.main()

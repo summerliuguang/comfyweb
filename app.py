@@ -1385,13 +1385,24 @@ def _chat_json(messages, max_tokens=4000, model=None):
         return None
 
 
+def _batch_default_model():
+    """批量细化默认用免费模型(:free,如 nemotron);网关没有免费的再退回默认。"""
+    try:
+        models = cached("ai:models", 60, lambda: _fetch_ai_models(*_litegate_cfg()))
+    except Exception:
+        models = []
+    free = sorted(m for m in models if ":free" in m)
+    return free[0] if free else _litegate_default_model()
+
+
 @app.post("/api/batch/refine")
 def api_batch_refine():
     if batchgen.STATE["running"]:
         return err("有批次正在运行,请等批次结束或先停止", 400)
     d = request.get_json(silent=True) or {}
+    model = (d.get("model") or "").strip() or _batch_default_model()
     try:
-        return {"tasks": batchgen.refine(d, _chat_json)}
+        return {"tasks": batchgen.refine(d, _chat_json, model=model), "model": model}
     except ComfyError as e:
         return err(e, 502)
     except ValueError as e:

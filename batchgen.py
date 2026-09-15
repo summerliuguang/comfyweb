@@ -121,7 +121,7 @@ def _refine_user_prompt(mode, theme, count, style):
             f"type 从 character/scene/bg/icon 中按内容选择。")
 
 
-def refine(body, llm_chat):
+def refine(body, llm_chat, model=None):
     """调 LLM 生成任务清单。llm_chat(messages, max_tokens, model) 由 app 注入。
 
     返回任务数组 [{name, pipeline, w, h, prompt, neg, seed}];三次重试防空清单。
@@ -146,7 +146,7 @@ def refine(body, llm_chat):
     for _attempt in range(3):  # LLM 偶发返回空清单,重试最多 3 次
         data = llm_chat([{"role": "system", "content": sys_p},
                          {"role": "user", "content": _refine_user_prompt(mode, theme, count, style)}],
-                        max_tokens=4000)
+                        max_tokens=4000, model=model)
         if not data:
             continue
         seed = secrets.randbits(31)

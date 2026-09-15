@@ -68,6 +68,31 @@
 
   /* ---------- AI 细化 ---------- */
 
+  /* 细化模型:默认免费模型(:free),选择记忆在本机;列表来自网关,拉不到就用后端默认 */
+  let batchRefineModel = '';
+  (async () => {
+    try {
+      const d = await toJson(await fetch('/api/ai/models'));
+      const models = d.models || [];
+      if (!models.length) return;
+      const sel = $('refineModel');
+      const saved = localStorage.getItem('comfyweb.batchmodel');
+      const want = models.includes(saved) ? saved
+        : (models.find(m => m.includes(':free')) || d.default || models[0]);
+      for (const m of models) {
+        const op = document.createElement('option');
+        op.value = m; op.textContent = m;
+        if (m === want) op.selected = true;
+        sel.appendChild(op);
+      }
+      batchRefineModel = sel.value;
+      sel.addEventListener('change', () => {
+        batchRefineModel = sel.value;
+        localStorage.setItem('comfyweb.batchmodel', sel.value);
+      });
+    } catch (e) { /* 网关不可达:留空,后端用默认模型 */ }
+  })();
+
   $('btnRefine').addEventListener('click', async () => {
     const btn = $('btnRefine'), errBox = $('refineError');
     errBox.hidden = true;
@@ -79,6 +104,7 @@
           mode: $('modeSelect').value, theme: $('themeInput').value,
           count: parseInt($('countInput').value, 10) || 8, style: $('styleInput').value,
           template: { positive: $('tplPos').value, negative: $('tplNeg').value },
+          model: batchRefineModel || undefined,
         }),
       }));
       tasks = d.tasks;

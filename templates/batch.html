@@ -34,6 +34,13 @@
     <label class="label">风格补充(可选)</label>
     <input class="input" id="styleInput" type="text" placeholder="例:中国风水墨、赛博朋克霓虹">
   </div>
+  <div class="field">
+    <label class="label">细化模型</label>
+    <div class="select is-fullwidth">
+      <select id="refineModel"><option value="">加载中…</option></select>
+    </div>
+    <p class="hint">默认免费模型(nemotron),可切换 deepseek-flash 等;列表来自 LiteGate 网关。</p>
+  </div>
   <button class="button is-link is-fullwidth is-medium" id="btnRefine">AI 细化提示词</button>
   <p class="task-err" id="refineError" hidden></p>
   <p class="hint">AI 会按管线内置风格生成提示词:人物/图标用 anima_turbo(英文标签),纯背景用 z-image-turbo(中文自然句)。</p>
