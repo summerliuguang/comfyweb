@@ -2,7 +2,8 @@
 
 数据源分层,取到即用:
 1. SSH(nvidia-smi):COMFY_SSH=user@host[:port] 时跨机取温度/利用率/显存,
-   Windows/Linux 皆可(主机需开启 SSH 并已部署本机公钥);
+   Windows/Linux 皆可(主机需开启 SSH、部署本机公钥,并先用 ssh-keyscan
+   录入主机密钥——本模块不自动信任首次连接);
 2. 本机 nvidia-smi:服务与 GPU 同机时;
 3. ComfyUI /system_stats:跨机零配置,只有显存与内存,无温度/利用率。
 """
@@ -35,9 +36,11 @@ def _parse_gpu_line(line):
 
 def _ssh_run(cmd, port, timeout=10):
     host, _ = ssh_target()
+    # 严格校验主机密钥,不做首次自动信任(accept-new 存在 TOFU 中间人窗口);
+    # 首次部署先手动录入:ssh-keyscan -p <port> <host> >> ~/.ssh/known_hosts
     r = subprocess.run(
         ["ssh", "-p", port, "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
-         "-o", "StrictHostKeyChecking=accept-new", host, cmd],
+         "-o", "StrictHostKeyChecking=yes", host, cmd],
         capture_output=True, text=True, timeout=timeout)
     if r.returncode != 0:
         raise RuntimeError((r.stderr or "").strip()[:120] or f"ssh 退出码 {r.returncode}")

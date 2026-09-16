@@ -2,12 +2,15 @@
 Description=ComfyWeb - ComfyUI 简易生成站
 After=network.target
 
+# 部署模板:按实际用户与路径修改 User / WorkingDirectory / ExecStart 后再安装
+# (cp 到 /etc/systemd/system/comfyweb.service 后 systemctl daemon-reload && systemctl enable --now comfyweb)
+
 [Service]
 Type=simple
 User=youruser
 WorkingDirectory=/opt/comfyweb
 Environment=PORT=5012
-ExecStart=/opt/venv/bin/python /opt/comfyweb/app.py
+ExecStart=/opt/comfyweb/venv/bin/python /opt/comfyweb/app.py
 Restart=on-failure
 RestartSec=3
 

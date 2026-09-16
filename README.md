@@ -36,9 +36,17 @@
 
 ## 部署（本机）
 
-- systemd 服务：`deploy/comfyweb.service`（绑 `127.0.0.1:5012`）
-- nginx：`deploy/nginx-comfyweb.conf`（对外 29xxx 端口自签证书，http 301 跳 https；可选 basic auth，凭据放 `.env`，htpasswd 路径见配置）
+- systemd 服务：`deploy/comfyweb.service`（模板，按实际用户/路径改过后安装；绑 `127.0.0.1:5012`）
+- nginx：`deploy/nginx-comfyweb.conf`（对外 29xxx 端口自签证书，http 301 跳 https，basic auth 凭据在服务器 `/etc/nginx/*.htpasswd`）
 - 导航页注册：按自己导航页的格式把端口加进服务列表
+
+## 安全注意
+
+- 应用只监听 `127.0.0.1`，对外一律经 nginx 反代（自签证书 + basic auth）；不要把应用端口直接暴露出局域网，更不要公开到公网。
+- 所有 POST 接口有同源校验（跨站请求被 403），ComfyUI 地址只允许解析到内网的 http(s) 纯主机地址（防 SSRF），Civitai 图片代理仅限 civitai.com 域。
+- `.env` 含 AI 网关密钥，已被 `.gitignore` 排除、不入库；仓库内所有示例配置均为占位符，部署时再填真实值。
+- 跨机 GPU 监控走 SSH 时（`COMFY_SSH`）首次部署先 `ssh-keyscan` 录入主机密钥，应用不做首次自动信任。
+- 数据都在 `data/` 目录（SQLite + 缓存），建议定期备份：`python scripts/backup.py [目标目录]`。
 
 ## 开发与测试
 
