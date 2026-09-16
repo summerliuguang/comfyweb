@@ -68,6 +68,14 @@
 
   /* ---------- AI 细化 ---------- */
 
+  /* 角色套图每人 7 张(立绘 + 6 场景),8 人封顶才不超单批 60 张上限 */
+  const modeCap = () => $('modeSelect').value === 'cast' ? 8 : 60;
+  $('modeSelect').addEventListener('change', () => {
+    const cap = modeCap();
+    $('countInput').max = cap;
+    if (parseInt($('countInput').value, 10) > cap) $('countInput').value = cap;
+  });
+
   /* 细化模型:默认免费模型(:free),选择记忆在本机;列表来自网关,拉不到就用后端默认 */
   let batchRefineModel = '';
   (async () => {
@@ -102,7 +110,8 @@
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           mode: $('modeSelect').value, theme: $('themeInput').value,
-          count: parseInt($('countInput').value, 10) || 8, style: $('styleInput').value,
+          count: Math.min(parseInt($('countInput').value, 10) || 8, modeCap()),
+          style: $('styleInput').value,
           template: { positive: $('tplPos').value, negative: $('tplNeg').value },
           model: batchRefineModel || undefined,
         }),

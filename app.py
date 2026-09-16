@@ -1,5 +1,6 @@
 """ComfyWeb — ComfyUI 简易生成站(Flask 入口)。"""
 import json
+import logging
 import os
 import re
 import secrets
@@ -20,6 +21,8 @@ import batchgen
 from comfy_client import ComfyError, client
 
 app = Flask(__name__)
+# 请求体上限:工作流导入 JSON 绰绰有余,同时挡住异常大包(nginx 层上限 20M)
+app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024
 PAGE_SIZE = 24
 PARAM_KEYS = {"name", "node_id", "input", "label", "widget", "visible", "advanced",
               "value", "min", "max", "step", "options", "dynamic", "role"}
@@ -523,7 +526,8 @@ def identify_local_bg(folder, ctype):
                  meta["cover"] if meta else ""))
             time.sleep(1.0)
     except Exception:
-        pass
+        logging.getLogger("comfyweb").exception(
+            "后台识别本地模型异常(folder=%s)", folder)
     finally:
         with _identify_lock:
             _identify_threads.pop(folder, None)
@@ -675,6 +679,8 @@ def api_workflow_parse():
         wf = json.loads(text)
     except ValueError as e:
         return err(f"JSON 解析失败: {e}")
+    if not isinstance(wf, dict):
+        return err("不是有效的工作流 JSON")
     classes = {v.get("class_type") for v in wf.values()
                if isinstance(v, dict) and v.get("class_type")}
     object_info = fetch_object_info(classes)

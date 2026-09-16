@@ -182,6 +182,28 @@ class ApiSmoke(unittest.TestCase):
             app_mod.remote_workflow_names = orig_fn
             app_mod._udwf_fail_at[0] = 0.0
 
+    def test_parse_rejects_non_object_json(self):
+        """粘贴 JSON 数组/数字应返回 400 友好报错,而不是 AttributeError 500。"""
+        for text in ("[1,2,3]", "42", '"text"'):
+            r = self.c.post("/api/workflows/parse", json={"text": text})
+            self.assertEqual(r.status_code, 400)
+            self.assertIn("不是有效的工作流", r.get_json()["error"])
+
+    def test_refine_cast_count_capped(self):
+        """套图模式每人展开 7 张,人数上限 8(共 56 张)才不超单批 60 张上限。"""
+        import batchgen
+
+        def fake_llm(messages, max_tokens=4000, model=None):
+            return {"characters": [
+                {"cn": f"角色{i}", "look": "girl", "outfit": "dress",
+                 "scenes": [{"cn": f"场景{j}", "desc": f"scene {j}"}
+                            for j in range(6)]}
+                for i in range(12)]}
+
+        tasks = batchgen.refine({"mode": "cast", "theme": "测试", "count": 12}, fake_llm)
+        self.assertEqual(len(tasks), 56)  # 8 人 × 7 张,而非 12 人 × 7 = 84
+        self.assertTrue(all(t["pipeline"] == "anima" for t in tasks))
+
     def test_batch_default_model_prefers_free(self):
         """批量细化默认模型应优先选免费模型(:free),没有免费的才退回网关默认。"""
         import app as app_mod
@@ -198,6 +220,47 @@ class ApiSmoke(unittest.TestCase):
             self.assertEqual(app_mod._batch_default_model(), "deepseek-flash")
         finally:
             app_mod._fetch_ai_models, app_mod.cached = orig_fetch, orig_cached
+
+
+class TestUrlValidation(unittest.TestCase):
+    """comfy_url 校验:只放行解析到内网的 http(s) 纯主机地址(SSRF 防护边界)。"""
+
+    def test_private_literal_ok(self):
+        from comfy_client import ComfyClient
+        ComfyClient._validate_url("http://192.168.1.10:8188")   # 不抛即通过
+        ComfyClient._validate_url("https://10.0.0.2")
+        ComfyClient._validate_url("http://[fd00::5]:8188")
+
+    def _dns(self, ip):
+        """临时把 comfy_client 的域名解析固定到指定 IP。"""
+        import socket
+        import comfy_client
+        orig = comfy_client.socket.getaddrinfo
+
+        def fake(host, port, **kw):
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port or 0))]
+        comfy_client.socket.getaddrinfo = fake
+        self.addCleanup(lambda: setattr(comfy_client.socket, "getaddrinfo", orig))
+
+    def test_public_ip_rejected(self):
+        from comfy_client import ComfyClient, ComfyError
+        self._dns("93.184.216.34")
+        with self.assertRaises(ComfyError):
+            ComfyClient._validate_url("http://comfy.example.com:8188")
+
+    def test_bad_shapes_rejected(self):
+        from comfy_client import ComfyClient, ComfyError
+        bad = [
+            "ftp://192.168.1.5",                    # 非 http(s)
+            "http://user:pass@192.168.1.5",         # 带凭据
+            "http://192.168.1.5/api",               # 带路径
+            "http://192.168.1.5?x=1",               # 带查询串
+            "http://192.168.1.5\n:8188",            # 控制字符
+            "http://not-a-host.example",            # 解析失败
+        ]
+        for url in bad:
+            with self.assertRaises(ComfyError, msg=url):
+                ComfyClient._validate_url(url)
 
 
 if __name__ == "__main__":

@@ -90,6 +90,8 @@
 <script>
 (function () {
   const $ = id => document.getElementById(id);
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   /* 主题模式:跟随系统/日间/夜间(存本设备) */
   const themeBtns = document.getElementById('themeBtns');
@@ -230,7 +232,7 @@
       html += '</table>';
       box.innerHTML = html;
     } catch (e) {
-      box.innerHTML = `<p class="task-err">${e.message}</p>`;
+      box.innerHTML = `<p class="task-err">${esc(e.message)}</p>`;
     }
   }
 

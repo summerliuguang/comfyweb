@@ -133,7 +133,8 @@ def refine(body, llm_chat, model=None):
     if not theme:
         raise ValueError("主题为空")
     try:
-        count = max(1, min(int(body.get("count") or 6), 12 if mode == "cast" else MAX_BATCH))
+        # 套图每人展开 1 立绘 + 6 场景 = 7 张,8 人封顶(56 张)才不超 start 的 MAX_BATCH
+        count = max(1, min(int(body.get("count") or 6), 8 if mode == "cast" else MAX_BATCH))
     except (TypeError, ValueError):
         count = 6
     style = (body.get("style") or "").strip()

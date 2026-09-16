@@ -2,6 +2,8 @@
 (function () {
   const $ = id => document.getElementById(id);
   const TYPE = window.CIVI_TYPE;
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   let pageNo = 1, lastQ = '', lastSort = 'Most Downloaded', lastBase = '';
   let cursorFor = { 1: null };  // 每页的请求游标;cursorFor[N+1] 在第 N 页返回后可知
   let hasNext = false;
@@ -98,7 +100,7 @@
           .then(() => startIdentifyPoll()).catch(() => {});
       }
     } catch (e) {
-      box.innerHTML = `<p class="task-err">${e.message}</p>`;
+      box.innerHTML = `<p class="task-err">${esc(e.message)}</p>`;
     }
   }
 
@@ -204,7 +206,7 @@
       renderDetail(m, cover);
     } catch (e) {
       if (refresh) alert('从 Civitai 更新失败: ' + e.message);
-      else box.innerHTML = `<p class="task-err">${e.message}</p>`;
+      else box.innerHTML = `<p class="task-err">${esc(e.message)}</p>`;
     }
   }
 
