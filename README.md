@@ -27,7 +27,12 @@
 
 ## 架构
 
-- Flask 3.1.3 多页应用（`app.py`），所有 ComfyUI 调用经本站后端代理（ComfyUI 默认无 CORS，浏览器无法直连）。
+- Flask 3.1.3 多页应用:入口 `app.py` 只含应用工厂与启动,路由按功能域拆在 `views/` 包——
+  `gen`(生成与工作流模板)、`gallery`(画廊与收藏)、`civitai`(模型/LoRA 页)、`ai`(AI 提示词助手)、
+  `batch`(批量生成)、`admin`(设置/状态/健康检查)。模块可在「设置 → 功能开关」即时开关
+  (存数据库),`.env` 里 `ENABLE_*` 是初始默认;某模块依赖缺失或加载失败只跳过该功能,
+  其余不受影响。所有 ComfyUI 调用经本站后端代理
+  （ComfyUI 默认无 CORS,浏览器无法直连）。
 - `comfy_client.py`：HTTP API 封装 + 常驻 WebSocket 监听线程（progress_state / execution_* 事件，兼容旧版），断线自动重连；WS 不可用时轮询 `/history` 对账兜底。
 - `workflow.py`：API 格式工作流解析（参数自动识别）与提交时值注入。
 - `batchgen.py`：批量生成（AI 细化任务清单 + 内置 anima/z-image 管线预设 + 按模型分组的生成引擎）。

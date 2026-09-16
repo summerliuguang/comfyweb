@@ -109,7 +109,7 @@ class ApiSmoke(unittest.TestCase):
 
     def test_civitai_image_proxy(self):
         """/civimg 走 fetch_image 的 requests 响应(.content),二次请求命中磁盘缓存。"""
-        import app as app_mod
+        import civitai as civ_mod
         from urllib.parse import quote
 
         class FakeResp:
@@ -120,26 +120,26 @@ class ApiSmoke(unittest.TestCase):
                 pass
 
         calls = []
-        orig = app_mod.civitai.fetch_image
+        orig = civ_mod.fetch_image
 
         def fake_fetch(url):
             calls.append(url)
             return FakeResp()
 
-        app_mod.civitai.fetch_image = fake_fetch
+        civ_mod.fetch_image = fake_fetch
         try:
             u = quote("https://image.civitai.com/x/1.jpeg", safe="")
             r = self.c.get(f"/civimg?u={u}")
             self.assertEqual(r.status_code, 200)
             self.assertEqual(r.data, b"fake-jpeg-bytes")
             # 同 URL 二次请求应命中缓存,不再回调 fetch_image
-            app_mod.civitai.fetch_image = lambda url: (_ for _ in ()).throw(
+            civ_mod.fetch_image = lambda url: (_ for _ in ()).throw(
                 AssertionError("第二次请求不应回源"))
             r = self.c.get(f"/civimg?u={u}")
             self.assertEqual(r.status_code, 200)
             self.assertEqual(r.data, b"fake-jpeg-bytes")
         finally:
-            app_mod.civitai.fetch_image = orig
+            civ_mod.fetch_image = orig
 
     def test_remote_workflows_fast_fail_when_disconnected(self):
         """WS 明确未连接时 /api/remote/workflows 应快速 503,不进入 3 次重试的长等待。"""
@@ -157,30 +157,29 @@ class ApiSmoke(unittest.TestCase):
     def test_remote_workflows_failure_cooldown(self):
         """拉取失败后 30s 冷却期内直接 503,不再每次都跑满重试周期。"""
         import time
-        import app as app_mod
         from comfy_client import client
-        from workflow import WorkflowParseError  # noqa: F401  (确保 ComfyError 可用)
         from comfy_client import ComfyError
-        orig_state, orig_fn = client.ws_state, app_mod.remote_workflow_names
+        from views import gen as vgen
+        orig_state, orig_fn = client.ws_state, vgen.remote_workflow_names
         client.ws_state = "已连接"
-        app_mod._udwf_fail_at[0] = 0.0
+        vgen._udwf_fail_at[0] = 0.0
 
         def boom():
             raise ComfyError("连接 ComfyUI 失败: 测试")
-        app_mod.remote_workflow_names = boom
+        vgen.remote_workflow_names = boom
         try:
             r = self.c.get("/api/remote/workflows")
             self.assertEqual(r.status_code, 502)
             r2 = self.c.get("/api/remote/workflows")
             self.assertEqual(r2.status_code, 503)
             self.assertIn("稍候", r2.get_json()["error"])
-            app_mod._udwf_fail_at[0] = time.time() - 31  # 冷却期过后恢复
+            vgen._udwf_fail_at[0] = time.time() - 31  # 冷却期过后恢复
             r3 = self.c.get("/api/remote/workflows")
             self.assertEqual(r3.status_code, 502)
         finally:
             client.ws_state = orig_state
-            app_mod.remote_workflow_names = orig_fn
-            app_mod._udwf_fail_at[0] = 0.0
+            vgen.remote_workflow_names = orig_fn
+            vgen._udwf_fail_at[0] = 0.0
 
     def test_parse_rejects_non_object_json(self):
         """粘贴 JSON 数组/数字应返回 400 友好报错,而不是 AttributeError 500。"""
@@ -206,20 +205,56 @@ class ApiSmoke(unittest.TestCase):
 
     def test_batch_default_model_prefers_free(self):
         """批量细化默认模型应优先选免费模型(:free),没有免费的才退回网关默认。"""
-        import app as app_mod
-        orig_fetch, orig_cached = app_mod._fetch_ai_models, app_mod.cached
-        app_mod._fetch_ai_models = lambda b, k: [
+        from views import ai as vai
+        from views import batch as vbatch
+        orig_fetch, orig_cached = vai._fetch_ai_models, vbatch.cached
+        vai._fetch_ai_models = lambda b, k: [
             "deepseek-flash", "mimo-v2.5",
             "nvidia/nemotron-3-super-120b-a12b:free",
             "nvidia/nemotron-3-ultra-550b-a55b:free"]
-        app_mod.cached = lambda key, ttl, fn: fn()  # 绕过缓存直接取
+        vbatch.cached = lambda key, ttl, fn: fn()  # 绕过缓存直接取
         try:
-            self.assertEqual(app_mod._batch_default_model(),
+            self.assertEqual(vbatch._batch_default_model(),
                              "nvidia/nemotron-3-super-120b-a12b:free")
-            app_mod._fetch_ai_models = lambda b, k: ["deepseek-flash", "mimo-v2.5"]
-            self.assertEqual(app_mod._batch_default_model(), "deepseek-flash")
+            vai._fetch_ai_models = lambda b, k: ["deepseek-flash", "mimo-v2.5"]
+            self.assertEqual(vbatch._batch_default_model(), "deepseek-flash")
         finally:
-            app_mod._fetch_ai_models, app_mod.cached = orig_fetch, orig_cached
+            vai._fetch_ai_models, vbatch.cached = orig_fetch, orig_cached
+
+    def test_feature_flags(self):
+        """ENABLE_* 作为初始默认:置 0 后对应路由 404、菜单隐藏,其余模块不受影响。"""
+        import os
+        import app as app_mod
+        os.environ["ENABLE_CIVITAI"] = "0"
+        try:
+            app2 = app_mod.create_app()
+            self.assertTrue(app2.config["FEATURES"]["civitai"])  # 模块仍加载,由门控拦截
+            c = app2.test_client()
+            self.assertEqual(c.get("/models").status_code, 404)
+            self.assertEqual(c.get("/api/civitai/search").status_code, 404)
+            self.assertEqual(c.get("/").status_code, 200)  # 其余模块照常
+            html = c.get("/settings").get_data(as_text=True)
+            self.assertNotIn('href="/models"', html)  # 菜单入口已隐藏
+        finally:
+            os.environ.pop("ENABLE_CIVITAI", None)
+
+    def test_feature_toggle_from_settings(self):
+        """设置页开关(存数据库)即时生效:关闭即 404+菜单隐藏,重开恢复。"""
+        import app as app_mod
+        app2 = app_mod.create_app()
+        c = app2.test_client()
+        r = c.post("/api/features", json={"feature": "gallery", "enabled": False})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(c.get("/gallery").status_code, 404)
+        self.assertNotIn('href="/gallery"', c.get("/settings").get_data(as_text=True))
+        r = c.post("/api/features", json={"feature": "gallery", "enabled": True})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(c.get("/gallery").status_code, 200)
+        self.assertIn('href="/gallery"', c.get("/settings").get_data(as_text=True))
+        # 无效功能名被拒绝
+        r = c.post("/api/features", json={"feature": "admin", "enabled": False})
+        self.assertEqual(r.status_code, 400)
+        db.set_setting("enable_gallery", "")  # 还原为跟随默认,避免影响其他用例
 
 
 class TestUrlValidation(unittest.TestCase):
