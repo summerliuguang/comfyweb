@@ -178,6 +178,7 @@ def get_db():
         conn = sqlite3.connect(DB_PATH, timeout=15)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")  # WAL 官方推荐:减少 fsync,掉电不损坏库
         conn.execute("PRAGMA foreign_keys=ON")
         _local.conn = conn
     return conn
