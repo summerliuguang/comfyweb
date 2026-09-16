@@ -197,3 +197,96 @@ class TestSanitizeAndError(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestFillMissingRequired(unittest.TestCase):
+    """节点保存格式只给部分 widget 打标记时,必填输入应注入 object_info 默认值。"""
+
+    def test_missing_required_filled_with_defaults(self):
+        from workflow import WorkflowParseError, ui_to_api
+        uiwf = {
+            "nodes": [
+                {"id": 1, "type": "KSampler", "mode": 0,
+                 "inputs": [{"name": "model", "type": "MODEL", "link": 1},
+                            {"name": "positive", "type": "CONDITIONING", "link": 2},
+                            {"name": "negative", "type": "CONDITIONING", "link": 3},
+                            {"name": "latent_image", "type": "LATENT", "link": 4},
+                            {"name": "seed", "type": "INT", "widget": {"name": "seed"}}],
+                 "widgets_values": [1]},
+                {"id": 2, "type": "CheckpointLoaderSimple", "mode": 0,
+                 "inputs": [],
+                 "widgets_values": ["v1-5-pruned.safetensors"]},
+                {"id": 3, "type": "CLIPTextEncode", "mode": 0,
+                 "inputs": [{"name": "clip", "type": "CLIP", "link": 5}],
+                 "widgets_values": ["a cat"]},
+                {"id": 4, "type": "CLIPTextEncode", "mode": 0,
+                 "inputs": [{"name": "clip", "type": "CLIP", "link": 6}],
+                 "widgets_values": ["bad"]},
+                {"id": 5, "type": "EmptyLatentImage", "mode": 0,
+                 "inputs": [],
+                 "widgets_values": [512, 512, 1]},
+                {"id": 6, "type": "VAEDecode", "mode": 0,
+                 "inputs": [],
+                 "widgets_values": []},
+                {"id": 7, "type": "SaveImage", "mode": 0,
+                 "inputs": [],
+                 "widgets_values": ["out"]},
+            ],
+            "links": [
+                [1, 2, 0, 1, 0, "MODEL"],
+                [2, 3, 0, 1, 1, "CONDITIONING"],
+                [3, 4, 0, 1, 2, "CONDITIONING"],
+                [4, 5, 0, 1, 3, "LATENT"],
+                [5, 2, 1, 3, 0, "CLIP"],
+                [6, 2, 1, 4, 0, "CLIP"],
+            ],
+        }
+        object_info = {
+            "KSampler": {"input": {"required": {
+                "model": ["MODEL"],
+                "seed": ["INT", {"default": 0, "min": 0, "max": 2**32}],
+                "steps": ["INT", {"default": 20, "min": 1, "max": 100}],
+                "cfg": ["FLOAT", {"default": 8.0, "min": 0, "max": 100}],
+                "sampler_name": [["euler", "res_multistep"]],
+                "scheduler": [["simple", "normal"]],
+                "denoise": ["FLOAT", {"default": 1.0, "min": 0, "max": 1}],
+                "positive": ["CONDITIONING"], "negative": ["CONDITIONING"],
+                "latent_image": ["LATENT"]}}},
+            "CheckpointLoaderSimple": {"input": {"required": {
+                "ckpt_name": [["v1-5-pruned.safetensors"]]}}},
+            "CLIPTextEncode": {"input": {"required": {"clip": ["CLIP"], "text": ["STRING", {"multiline": True}]}}},
+            "EmptyLatentImage": {"input": {"required": {
+                "width": ["INT", {"default": 512}], "height": ["INT", {"default": 512}],
+                "batch_size": ["INT", {"default": 1}]}}},
+            "VAEDecode": {"input": {"required": {"samples": ["LATENT"], "vae": ["VAE"]}}},
+            "SaveImage": {"input": {"required": {
+                "images": ["IMAGE"],
+                "filename_prefix": ["STRING", {"default": "ComfyUI"}]}}},
+            # 模拟 AnimaLLLiteApply:必填的 strength/start/end/preserve 不在 inputs 标记里
+            "FakeLLLite": {"input": {"required": {
+                "model": ["MODEL"], "lllite_name": [["pose-1.safetensors"]],
+                "strength": ["FLOAT", {"default": 1.0}],
+                "start_percent": ["FLOAT", {"default": 0.0}],
+                "end_percent": ["FLOAT", {"default": 1.0}],
+                "preserve_wrapper": ["BOOLEAN", {"default": True}]}}},
+        }
+        # 给节点 1 换成 FakeLLLite 双节点结构太复杂,直接单节点验证注入行为
+        single = {"nodes": [
+            {"id": 9, "type": "FakeLLLite", "mode": 0,
+             "inputs": [{"name": "model", "type": "MODEL", "link": 1},
+                        {"name": "lllite_name", "type": "COMBO", "widget": {"name": "lllite_name"}}],
+             "widgets_values": ["pose-1.safetensors"]},
+            {"id": 1, "type": "CheckpointLoaderSimple", "mode": 0,
+             "inputs": [], "widgets_values": ["v1-5-pruned.safetensors"]},
+        ], "links": [[1, 1, 0, 9, 0, "MODEL"]]}
+        api = ui_to_api(single, object_info)
+        node = api["9"]["inputs"]
+        self.assertEqual(node["lllite_name"], "pose-1.safetensors")
+        self.assertEqual(node["strength"], 1.0)          # 未映射的必填输入注入默认值
+        self.assertEqual(node["start_percent"], 0.0)
+        self.assertEqual(node["end_percent"], 1.0)
+        self.assertTrue(node["preserve_wrapper"])
+
+
+if __name__ == "__main__":
+    unittest.main()

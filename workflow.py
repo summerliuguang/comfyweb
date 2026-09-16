@@ -193,8 +193,16 @@ def _extract_node_values(node, specs, title):
                 wi += 1
                 continue
             if wi >= len(widgets):
-                raise WorkflowParseError(
-                    f"节点「{title}」的参数值数量不足({name}),请用「导出(API)」")
+                # UI 保存值不足(如 Qwen3_VQA 的 attention 控件不入 widgets_values):
+                # 组合类取首项、有声明默认值取默认值,避免整个工作流无法导入
+                s0, meta = spec
+                fallback = spec[0][0] if isinstance(s0, list) and s0 else meta.get("default")
+                if fallback is None:
+                    raise WorkflowParseError(
+                        f"节点「{title}」的参数值数量不足({name}),请用「导出(API)」")
+                values[name] = _cast(s0, _norm_combo_str(fallback)
+                                     if isinstance(s0, list) else fallback)
+                continue
             s0, meta = spec
             val = widgets[wi]
             wi += 1
@@ -223,6 +231,31 @@ def _resolve_node_inputs(specs, link_refs, links, nodes):
         else:
             inputs[name] = [kind[1], kind[2]]
     return inputs
+
+
+def _fill_missing_required(inputs, info, specs, link_refs):
+    """某些节点保存格式只给部分 widget 打标记,未映射的必填输入会从结果里丢失,
+    提交时被 ComfyUI 校验拒绝(2026-09 AnimaLLLiteApply_sdscripts 踩过)。
+    这里对「required 且未被赋值/连线」的 widget 输入注入 object_info 声明的默认值;
+    无默认值的组合类留给 ComfyUI 校验报错。"""
+    required = (info.get("input") or {}).get("required") or {}
+    for name, spec in required.items():
+        if name in inputs or name in link_refs or name not in specs:
+            continue
+        if not isinstance(spec, list) or not spec:
+            continue
+        s0, meta = spec[0], (spec[1] if len(spec) > 1 and isinstance(spec[1], dict) else {})
+        if isinstance(s0, list):
+            continue  # 下拉缺省不猜,交给校验报错提示用户
+        default = meta.get("default")
+        if s0 == "INT":
+            inputs[name] = int(default) if default is not None else 0
+        elif s0 == "FLOAT":
+            inputs[name] = float(default) if default is not None else 0.0
+        elif s0 == "BOOLEAN":
+            inputs[name] = bool(default)
+        else:  # STRING(含无默认值):必须注入空串,否则 ComfyUI 会静默剪掉整条下游分支
+            inputs[name] = str(default) if default is not None else ""
 
 
 def ui_to_api(uiwf, object_info):
@@ -254,6 +287,7 @@ def ui_to_api(uiwf, object_info):
         values, link_refs = _extract_node_values(node, specs, title)
         inputs = _resolve_node_inputs(specs, link_refs, links, nodes)
         inputs.update(values)
+        _fill_missing_required(inputs, info, specs, link_refs)
 
         spec_node = {"class_type": cls, "inputs": inputs}
         if node.get("title"):
