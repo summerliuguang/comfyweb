@@ -73,6 +73,12 @@ OI = {
     "SaveImage": {"input": {"required": {
         "filename_prefix": ["STRING", {"default": "ComfyUI"}],
         "images": ["IMAGE", {}]}}, "name": "SaveImage"},
+    "StringConcatenate": {"input": {"required": {
+        "string_a": ["STRING", {"multiline": True}],
+        "string_b": ["STRING", {"multiline": True}],
+        "delimiter": ["STRING", {"default": "", "multiline": False}]}},
+        "input_order": {"required": ["string_a", "string_b", "delimiter"]},
+        "output": ["STRING"], "name": "StringConcatenate"},
 }
 
 
@@ -138,6 +144,17 @@ class TestUiToApi(unittest.TestCase):
         self.assertNotIn("upload", api["3"]["inputs"])
         self.assertEqual(api["3"]["inputs"]["steps"], 20)
 
+    def test_link_slot_only_widgets(self):
+        """inputs 只含连线槽(StringConcatenate 型)时,widgets_values 按 object_info
+        顺序对位,连线槽位的陈旧值不采纳(表情差分 string_a 丢失的回归)。"""
+        specs = workflow._widget_inputs(OI["StringConcatenate"])
+        node = {"inputs": [{"name": "string_b", "type": "STRING", "link": 7,
+                            "widget": {"name": "string_b"}}],
+                "widgets_values": ["smile", "陈旧占位", ", "]}
+        values, link_refs = workflow._extract_node_values(node, specs, "表情1")
+        self.assertEqual(values, {"string_a": "smile", "delimiter": ", "})
+        self.assertEqual(link_refs, {"string_b": 7})
+
 
 class TestParseAndBuild(unittest.TestCase):
     def setUp(self):
@@ -171,6 +188,48 @@ class TestParseAndBuild(unittest.TestCase):
             {"widget": "number", "value": 512, "min": 64, "max": 8192}, 99999), 8192)
         self.assertEqual(workflow.coerce_value({"widget": "toggle", "value": True}, "false"), False)
         self.assertEqual(workflow.coerce_value({"widget": "float", "value": 1.0}, "bad"), 1.0)
+
+    def test_positive_feeder_string_visible(self):
+        """正面提示词经字符串节点喂入时,其多行 STRING 控件应显示在表单上。"""
+        wf = copy.deepcopy(UI_WF)
+        wf["nodes"][2] = {  # 原「正面」CLIPTextEncode 改为 StringConcatenate 喂入
+            "id": 5, "type": "StringConcatenate", "mode": 0, "title": "表情词",
+            "inputs": [{"name": "string_b", "type": "STRING", "link": 4,
+                        "widget": {"name": "string_b"}}],
+            "outputs": [{"name": "STRING", "type": "STRING", "links": [2]}],
+            "widgets_values": ["masterpiece girl", "陈旧占位", ", "]}
+        api = workflow.ui_to_api(wf, OI)
+        tpl = workflow.parse_workflow(api, OI)
+        sa = next(p for p in tpl["params"] if p["name"] == "5:string_a")
+        self.assertEqual(sa["value"], "masterpiece girl")
+        self.assertTrue(sa["visible"])
+        self.assertFalse(sa["advanced"])  # 主表单,不折叠进高级区
+        dl = next(p for p in tpl["params"] if p["name"] == "5:delimiter")
+        self.assertFalse(dl["visible"])  # 分隔符属 punctuation,不展示
+        self.assertEqual(api["5"]["inputs"]["string_b"], ["4", 1])  # 连线未被陈旧值覆盖
+
+    def test_positive_feeder_behind_clip_encode(self):
+        """采样器 positive ← CLIPTextEncode ← 字符串拼接:表情词同样要可见
+        (表情差分生成器的真实接线)。"""
+        wf = copy.deepcopy(UI_WF)
+        wf["nodes"].append({
+            "id": 9, "type": "StringConcatenate", "mode": 0, "title": "表情1: smile",
+            "inputs": [{"name": "string_b", "type": "STRING", "link": 6,
+                        "widget": {"name": "string_b"}}],
+            "outputs": [{"name": "STRING", "type": "STRING", "links": [7]}],
+            "widgets_values": ["smile", "陈旧占位", ", "]})
+        n5 = wf["nodes"][2]  # 正面 CLIPTextEncode 的 text 改为吃节点 9 的输出
+        n5["inputs"][1] = {"name": "text", "type": "STRING", "link": 7,
+                           "widget": {"name": "text"}}
+        wf["links"].append([6, 4, 1, 9, 0, "STRING"])   # checkpoint CLIP → concat.string_b
+        wf["links"].append([7, 9, 0, 5, 1, "STRING"])   # concat → encode.text
+        api = workflow.ui_to_api(wf, OI)
+        tpl = workflow.parse_workflow(api, OI)
+        sa = next(p for p in tpl["params"] if p["name"] == "9:string_a")
+        self.assertEqual(sa["value"], "smile")
+        self.assertTrue(sa["visible"])
+        self.assertFalse(sa["advanced"])
+        self.assertEqual(api["5"]["inputs"]["text"], ["9", 0])  # 连线完好
 
 
 class TestSanitizeAndError(unittest.TestCase):

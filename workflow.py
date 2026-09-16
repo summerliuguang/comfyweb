@@ -184,6 +184,11 @@ def _extract_node_values(node, specs, title):
                 values[name] = casted
     else:
         widgets = list(widgets or [])
+        if not widget_order and widgets:
+            # 新版 UI 保存:未转成输入槽的普通控件不进 inputs,按标记收集的顺序
+            # 会漏掉它们(StringConcatenate 的 string_a 踩过,表情词全丢);
+            # 此时退回按 object_info 顺序对位,连线的槽位也占一个值的位置
+            widget_order = list(specs.keys())
         wi = 0
         for name in widget_order:
             spec = specs.get(name)
@@ -217,6 +222,8 @@ def _extract_node_values(node, specs, title):
             if casted in ("", None):
                 continue
             values[name] = casted
+    for name in link_refs:  # 有连线的输入以连线为准,widgets_values 里的陈旧值不覆盖
+        values.pop(name, None)
     return values, link_refs
 
 
@@ -440,6 +447,30 @@ def parse_workflow(wf, object_info=None):
             if "label_base" in kw:
                 kw["label"] = unique_label(title or kw.pop("label_base"))
             add(nid, name, value, **kw)
+
+    # 正面提示词不是文本框直连(经 String 拼接等节点喂入)时,把上游一跳节点的
+    # 多行 STRING 控件暴露到表单,否则整页只剩负面提示词(表情差分生成器踩过)
+    params_by_node = {}
+    for p in params:
+        params_by_node.setdefault(p["node_id"], []).append(p)
+    for spec in nodes.values():
+        link = (spec.get("inputs") or {}).get("positive")
+        if not (isinstance(link, list) and len(link) >= 2):
+            continue
+        src_id, src = str(link[0]), nodes.get(str(link[0]))
+        if src and src.get("class_type") == PROMPT_CLASS:
+            # positive 直连 CLIPTextEncode:text 是文本框时已作 positive 参数处理,
+            # 只有 text 也是连线(被字符串节点喂入)时才再往上看一跳
+            tlink = (src.get("inputs") or {}).get("text")
+            if not (isinstance(tlink, list) and len(tlink) >= 2):
+                continue
+            src_id, src = str(tlink[0]), nodes.get(str(tlink[0]))
+        if not src:
+            continue
+        for p in params_by_node.get(src_id, []):
+            if p.get("widget") == "textarea" and not p.get("visible"):
+                p["visible"] = True
+                p["advanced"] = False
 
     sort_params(params)
     return {"workflow": wf, "params": params, "batch_node": batch_node,
