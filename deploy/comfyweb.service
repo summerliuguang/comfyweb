@@ -4,15 +4,22 @@ After=network.target
 
 # 部署模板:按实际用户与路径修改 User / WorkingDirectory / ExecStart 后再安装
 # (cp 到 /etc/systemd/system/comfyweb.service 后 systemctl daemon-reload && systemctl enable --now comfyweb)
+#
+# 单 worker 是刻意的:WS 常驻线程、批量引擎状态、进程内缓存都是进程级单例,
+# 多 worker 会重复监听/状态分裂;并发经 --threads 线程池提供。
+# --timeout 360 覆盖 AI 细化最长的 300s 网关超时,避免请求执行中被杀。
 
 [Service]
 Type=simple
 User=youruser
 WorkingDirectory=/opt/comfyweb
-Environment=PORT=5012
-ExecStart=/opt/comfyweb/venv/bin/python /opt/comfyweb/app.py
+ExecStart=/opt/comfyweb/venv/bin/gunicorn --chdir /opt/comfyweb --bind 127.0.0.1:5012 --workers 1 --threads 8 --worker-class gthread --timeout 360 --graceful-timeout 30 app:app
 Restart=on-failure
 RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
 
 [Install]
 WantedBy=multi-user.target

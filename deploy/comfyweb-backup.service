@@ -1,0 +1,11 @@
+[Unit]
+Description=ComfyWeb 数据库与配置备份
+# 部署模板:按实际用户与路径修改 User / ExecStart 后安装到 /etc/systemd/system/
+# 配套 timer: comfyweb-backup.timer(每日 03:30)
+
+[Service]
+Type=oneshot
+User=youruser
+ExecStart=/opt/comfyweb/venv/bin/python /opt/comfyweb/scripts/backup.py
+NoNewPrivileges=true
+PrivateTmp=true

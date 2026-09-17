@@ -1,0 +1,10 @@
+[Unit]
+Description=ComfyWeb 每日备份(03:30)
+# 部署模板:安装到 /etc/systemd/system/ 后 systemctl enable --now comfyweb-backup.timer
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
