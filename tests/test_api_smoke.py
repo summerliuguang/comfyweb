@@ -256,6 +256,67 @@ class ApiSmoke(unittest.TestCase):
         self.assertEqual(r.status_code, 400)
         db.set_setting("enable_gallery", "")  # 还原为跟随默认,避免影响其他用例
 
+    def test_image_proxy_survives_gen_disabled(self):
+        """/image 是画廊/收藏共用的基础设施:关闭 gen 后图片代理仍可用。"""
+        import os
+        import app as app_mod
+        os.environ["ENABLE_GEN"] = "0"
+        try:
+            app2 = app_mod.create_app()
+            c = app2.test_client()
+            self.assertEqual(c.get("/").status_code, 404)  # gen 已关
+            r = c.get("/image?filename=whatever.png")      # mock ComfyUI 对任意名回 PNG
+            self.assertEqual(r.status_code, 200)
+            self.assertTrue(r.data.startswith(b"\x89PNG"))
+        finally:
+            os.environ.pop("ENABLE_GEN", None)
+
+    def test_prune_tasks(self):
+        """记录清理:保留最近 record_keep 条,最旧的连图片记录一起删除。"""
+        db.set_setting("record_keep", "20")
+        try:
+            ids = [db.execute(
+                "INSERT INTO tasks(workflow_name) VALUES('prune-test')").lastrowid
+                for _ in range(25)]
+            img_id = db.execute(
+                "INSERT INTO images(task_id, filename) VALUES(?, 'p.png')",
+                (ids[0],)).lastrowid
+            db.prune_tasks()
+            left = {r["id"] for r in
+                    db.query("SELECT id FROM tasks WHERE workflow_name='prune-test'")}
+            self.assertEqual(len(left), 20)
+            self.assertIn(ids[-1], left)       # 最新保留
+            self.assertNotIn(ids[0], left)     # 最旧删除
+            self.assertIsNone(db.query_one(
+                "SELECT id FROM images WHERE id=?", (img_id,)))  # CASCADE 连带删
+        finally:
+            db.set_setting("record_keep", "")
+            db.execute("DELETE FROM tasks WHERE workflow_name='prune-test'")
+
+    def test_batch_status_reconciles_stale_tasks(self):
+        """批量页轮询对活跃任务对账:history 缺失的超龄任务标 error 闭环,新任务不受影响。"""
+        from comfy_client import client
+        old_id = db.execute(
+            "INSERT INTO tasks(prompt_id, workflow_name, status, created_at) "
+            "VALUES('stale-pid', '批量生成', 'queued', "
+            "datetime('now','localtime','-3 hours'))").lastrowid
+        fresh_id = db.execute(
+            "INSERT INTO tasks(prompt_id, workflow_name, status, created_at) "
+            "VALUES('fresh-pid', '批量生成', 'queued', "
+            "datetime('now','localtime'))").lastrowid
+        orig = client.ws_state
+        client.ws_state = "已断开,正在重连"  # 绕过 WS 新鲜度守卫,强制走对账
+        try:
+            self.c.get("/api/batch/status")
+            old = db.query_one("SELECT status, error FROM tasks WHERE id=?", (old_id,))
+            self.assertEqual(old["status"], "error")       # history 无记录 → 兜底闭环
+            self.assertIn("丢失", old["error"] or "")
+            fresh = db.query_one("SELECT status FROM tasks WHERE id=?", (fresh_id,))
+            self.assertEqual(fresh["status"], "queued")    # 新任务不误杀
+        finally:
+            client.ws_state = orig
+            db.execute("DELETE FROM tasks WHERE id IN (?,?)", (old_id, fresh_id))
+
 
 class TestUrlValidation(unittest.TestCase):
     """comfy_url 校验:只放行解析到内网的 http(s) 纯主机地址(SSRF 防护边界)。"""

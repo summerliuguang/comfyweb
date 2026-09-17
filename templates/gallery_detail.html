@@ -37,6 +37,7 @@
 (function () {
   const qs = '{{ qs }}';
   const NEIGHBORS = {{ neighbors | tojson }};
+  const GEN_ON = {{ features.gen | tojson }};
   let cur = {{ idx }};
   const viewer = document.getElementById('viewer');
   const img = document.getElementById('detailImg');
@@ -120,7 +121,7 @@
         rows.push([esc(p.label), esc(p.value)]);
       }
       const dl = it.url + '&dl=1';
-      const again = it.w ? `<a class="button is-light is-small" href="/?template=${it.w}&task=${it.id}">再次生成</a>` : '';
+      const again = (it.w && GEN_ON) ? `<a class="button is-light is-small" href="/?template=${it.w}&task=${it.id}">再次生成</a>` : '';
       paramsCache[it.id] =
         '<table class="kv">' +
         rows.map(([k, v]) => `<tr><td>${k}</td><td class="val">${v}</td></tr>`).join('') +

@@ -331,6 +331,14 @@ def _sanitize_tasks(raw):
     return out
 
 
+def _prune_records():
+    """批次出口清理旧记录(生成提交路径之外的第二条任务写入来源)。"""
+    try:
+        db.prune_tasks()
+    except Exception as e:
+        log(f"清理旧记录失败: {e}")
+
+
 def engine(tasks):
     with _state_lock:
         STATE.update(running=True, stop=False, done=0, total=len(tasks), current="",
@@ -346,6 +354,7 @@ def engine(tasks):
                 log("用户停止")
                 with _state_lock:
                     STATE.update(running=False, finished=True)
+                _prune_records()
                 return
             if last_pipe and pipe_key != last_pipe:
                 log(f"切换模型 {PIPELINES[last_pipe]['model']} -> {PIPELINES[pipe_key]['model']},释放显存")
@@ -383,6 +392,7 @@ def engine(tasks):
     free_vram()
     with _state_lock:
         STATE.update(running=False, current="", finished=True)
+    _prune_records()
     log(f"批次结束:完成 {STATE['done']}/{STATE['total']},失败 {STATE['err']}")
 
 

@@ -212,6 +212,20 @@ def set_setting(key, value):
     )
 
 
+def prune_tasks():
+    """按 record_keep 设置保留最近 N 条任务,更早的连图片记录(外键 CASCADE)一起清理。
+
+    生成提交(views/gen)与批量引擎(batchgen)两条任务写入路径的共用出口。
+    """
+    try:
+        keep = max(20, int(get_setting("record_keep") or "200"))
+    except ValueError:
+        keep = 200
+    row = query_one("SELECT id FROM tasks ORDER BY id DESC LIMIT 1 OFFSET ?", (keep - 1,))
+    if row:
+        execute("DELETE FROM tasks WHERE id < ?", (row["id"],))  # 第 keep 条本身保留
+
+
 def update_workflow_meta(wid, name=None, template_json=None, filename=None):
     """兼容辅助:优先写 template_json;filename 仅为旧库迁移保留。"""
     if template_json is not None:

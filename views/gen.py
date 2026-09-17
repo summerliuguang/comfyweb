@@ -1,22 +1,18 @@
-"""生成与工作流模板:模板 CRUD/远端导入转换、生成提交、任务跟踪、图片代理。
+"""生成与工作流模板:模板 CRUD/远端导入转换、生成提交、任务跟踪。
 
-依赖 db(模板与任务存储)、comfy_client(提交与 WS 跟踪)、views.helpers(缓存/图片 URL)。
+图片代理在 views/media.py(画廊/收藏共用的共享基础设施)。
 """
 import json
-import os
 import time
 from datetime import datetime
-from urllib.parse import quote as urlquote
-from uuid import uuid4
 
-from flask import Blueprint, Response, render_template, request
+from flask import Blueprint, render_template, request
 
 import db
 import workflow as wfmod
-from comfy_client import ComfyError, client
+from comfy_client import ComfyError, client, reconcile_active_tasks
 
-from views.helpers import (PARAM_KEYS, cached, err, image_url, img_cache_get,
-                           img_cache_store)
+from views.helpers import PARAM_KEYS, cached, err, image_url
 
 bp = Blueprint("gen", __name__)
 
@@ -439,18 +435,6 @@ def api_workflow_delete(wid):
 
 # ---------- 生成 ----------
 
-def prune_tasks():
-    """按设置保留最近 N 条任务记录,更早的连图片记录一起清理。"""
-    try:
-        keep = max(20, int(db.get_setting("record_keep") or "200"))
-    except ValueError:
-        keep = 200
-    row = db.query_one("SELECT id FROM tasks ORDER BY id DESC LIMIT 1 OFFSET ?",
-                       (keep - 1,))
-    if row:
-        db.execute("DELETE FROM tasks WHERE id <= ?", (row["id"],))
-
-
 def params_display(tpl, values, seed):
     items = []
     for p in tpl.get("params") or []:
@@ -527,7 +511,7 @@ def api_generate():
              count if use_batch else 1))
         task_ids.append(cur.lastrowid)
     client.ensure_ws()
-    prune_tasks()
+    db.prune_tasks()
     return {"task_ids": task_ids, "error": "\n".join(errors)}
 
 
@@ -545,26 +529,6 @@ def serialize_task(t, images):
                     "url": image_url(im["filename"], im["subfolder"], im["type"])}
                    for im in images],
     }
-
-
-def reconcile_active_tasks(rows):
-    """WS 掉线兜底:仅在 WS 断开或事件流停滞超过 10 秒时用 history 对账,
-    WS 健康时每次轮询都查 history 会白白打 ComfyUI。"""
-    if client.ws_state == "已连接" and time.time() - client.last_event_ts < 10:
-        return
-    now = datetime.now()
-    for t in rows:
-        if t["status"] not in ("queued", "running") or not t["prompt_id"]:
-            continue
-        try:
-            started = datetime.strptime(t["created_at"], "%Y-%m-%d %H:%M:%S")
-        except ValueError:
-            continue
-        if (now - started).total_seconds() > 10:
-            try:
-                client.finalize_from_history(t["prompt_id"])
-            except Exception:
-                pass
 
 
 def queue_positions():
@@ -652,46 +616,6 @@ def api_task_cancel(tid):
     db.execute("UPDATE tasks SET status='canceled', finished_at=datetime('now','localtime') "
                "WHERE id=?", (tid,))
     return {"ok": True}
-
-
-# ---------- 图片代理(缩略图带磁盘缓存,原图实时回源) ----------
-
-@bp.get("/image")
-def image_proxy():
-    filename = request.args.get("filename", "")
-    if not filename:
-        return err("缺少 filename")
-    subfolder = request.args.get("subfolder", "")
-    img_type = request.args.get("type", "output")
-    preview = request.args.get("preview")
-    # 仅缩略图落盘缓存(原图体积大,仍实时回源)
-    ck = None
-    if preview:
-        ck = f"img:{img_type}:{subfolder}:{filename}:{preview}"
-        cached_path, cached_ct = img_cache_get(ck)
-        if cached_path:
-            return Response(cached_path.read_bytes(),
-                            content_type=cached_ct or "image/jpeg",
-                            headers={"Cache-Control": "public, max-age=604800"})
-    try:
-        r = client.download_image(filename, subfolder, img_type, preview)
-    except ComfyError as e:
-        return err(e, 502)
-    body = r.content
-    r.close()
-    if ck:
-        img_cache_store(ck, body, r.headers.get("Content-Type", "image/jpeg"))
-    headers = {"Cache-Control": "public, max-age=604800"}
-    if request.args.get("dl"):
-        # 中文前缀的文件名不能直接进 HTTP 头,按 RFC 5987 提供 UTF-8 文件名
-        ext = os.path.splitext(filename)[1] or ".png"
-        ascii_name = f"comfyweb_{uuid4().hex[:8]}{ext}"
-        utf8_name = urlquote(filename)
-        headers["Content-Disposition"] = (
-            f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{utf8_name}')
-    return Response(body,
-                    content_type=r.headers.get("Content-Type", "image/png"),
-                    headers=headers)
 
 
 # ---------- 注册与预热 ----------

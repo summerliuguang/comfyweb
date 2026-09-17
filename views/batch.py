@@ -5,7 +5,8 @@ import re
 from flask import Blueprint, render_template, request
 
 import batchgen
-from comfy_client import ComfyError
+import db
+from comfy_client import ComfyError, client, reconcile_active_tasks
 
 from views.helpers import cached, err
 
@@ -76,6 +77,14 @@ def api_batch_start():
 @bp.get("/api/batch/status")
 def api_batch_status():
     import hoststats
+    # 重启后批次状态闭环:非运行状态下仍存在活跃的批量任务时做一次 history 对账,
+    # 收尾停机期间错过 WS 事件的任务(10 秒新鲜度守卫在 reconcile 内部)
+    if not batchgen.STATE["running"]:
+        stale = db.query(
+            "SELECT * FROM tasks WHERE workflow_name=? AND status IN ('queued','running') "
+            "LIMIT 50", (batchgen.BATCH_WF_NAME,))
+        if stale:
+            reconcile_active_tasks(stale)
     return {**batchgen.state(), "host": hoststats.fetch()}
 
 

@@ -10,6 +10,7 @@ import socket
 import threading
 import time
 import uuid
+from datetime import datetime
 
 import requests
 from urllib.parse import quote, urlsplit
@@ -35,6 +36,36 @@ def format_prompt_error(data):
             detail = e.get("details") or ""
             parts.append(f"节点 {nid}({cls}): {e.get('message', '')}" + (f" - {detail}" if detail else ""))
     return "\n".join(p for p in parts if p)
+
+
+_STALE_TASK_SECONDS = 7200  # 兜底时限:批量单张超时上限 420s,留足余量
+
+
+def reconcile_active_tasks(rows):
+    """WS 掉线兜底:仅在 WS 断开或事件流停滞超过 10 秒时用 history 对账,
+    WS 健康时每次轮询都查 history 会白白打 ComfyUI。
+    超过兜底时限仍活跃、且 history 已无记录(本站与 ComfyUI 都重启过)的任务
+    标失败闭环,避免永远停在"生成中"。"""
+    if client.ws_state == "已连接" and time.time() - client.last_event_ts < 10:
+        return
+    now = datetime.now()
+    for t in rows:
+        if t["status"] not in ("queued", "running") or not t["prompt_id"]:
+            continue
+        try:
+            started = datetime.strptime(t["created_at"], "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            continue
+        age = (now - started).total_seconds()
+        try:
+            if age > _STALE_TASK_SECONDS:
+                client.finalize_from_history(
+                    t["prompt_id"], forced_status="error",
+                    error="长时间无结果(服务重启期间可能丢失)")
+            elif age > 10:
+                client.finalize_from_history(t["prompt_id"])
+        except Exception:
+            pass
 
 
 class ComfyClient:

@@ -37,13 +37,14 @@ def _load_env_file():
 
 _load_env_file()
 
-# 功能模块:全部注册,请求时按开关门控(admin 无开关,始终启用)。
+# 功能模块:全部注册,请求时按开关门控;media(图片代理)与 admin 无开关,始终启用。
 FEATURE_MODULES = [
     ("gen", "views.gen"),
     ("gallery", "views.gallery"),
     ("civitai", "views.civitai"),
     ("ai", "views.ai"),
     ("batch", "views.batch"),
+    ("media", "views.media"),
     ("admin", "views.admin"),
 ]
 
