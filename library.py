@@ -1,4 +1,4 @@
-"""NAS 图片库(library/):分类树 + 索引 + 缩略图 + 收编。
+"""NAS 图片库(library/):分类树 + 全库索引 + 缩略图 + 收编。
 
 目录规则(经确认的架构决策):
 - 大类 = 模型名(tasks.model 去扩展名);有任务归属的图进 `模型/日期_批次或工作流/`,
@@ -8,8 +8,11 @@
 - 收编:扫描 output/ 根目录平铺文件(手工子目录一律不碰),能对上 comfyweb
   任务记录的按记录归位,对不上的按前缀归未分类;GPU 同步重复推送的文件名
   以索引为准跳过;
+- 全库索引覆盖三类图片:library 归档、output/ 手工子目录(原地索引不移动)、
+  新生成归档——是画廊"显示所有图片"的统一数据源;
 - 索引正本在本机 data/library.db(SQLite 绝不在 CIFS 上开写连接,实测锁死),
-  每轮收编后经 backup API 快照 + 字节拷贝 + md5 校验推送 NAS index.db;
+  每轮变更后经 backup API 快照 + 字节拷贝 + md5 校验推送 NAS index.db;
+- 缩略图经 Pillow 本地生成(最长边 512 webp q75),存 library/thumbs 平行树;
 - reverse(filename) 把已收编的图还原回 output/ 并删索引行,作回滚保底。
 """
 import json
@@ -18,7 +21,7 @@ import shutil
 import sqlite3
 import threading
 import time
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import db
@@ -26,6 +29,7 @@ import db
 SHARD_LIMIT = 500          # 单目录图片上限,超过开 _002 分片
 LIB_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 UNCLASSIFIED = "未分类"
+THUMB_SIZE = 512
 
 _lock = threading.Lock()   # 索引库串行写(收编线程 + 管理端点)
 
@@ -43,6 +47,11 @@ def library_dir() -> Path:
 def output_dir() -> Path:
     """ComfyUI 落盘暂存区(收编来源;library 的同级 output)。"""
     return library_dir().parent / "output"
+
+
+def nas_root() -> Path:
+    """索引路径的基准根(comfyui 目录:library 与 output 的父级)。"""
+    return library_dir().parent
 
 
 def remote_enabled() -> bool:
@@ -101,7 +110,7 @@ def _shard_dir(base: Path) -> Path:
 
 
 def classify(filename, meta):
-    """按归属规则给出 (相对路径父目录, tags 列表)。
+    """按归属规则给出 (相对 library 根的父目录, tags 列表)。
 
     meta: {model, category, batch, workflow, prompt, seed, created_at} 或 None(无任务归属)。
     """
@@ -118,48 +127,82 @@ def classify(filename, meta):
     return parent, tags
 
 
-# ---------- 索引(本机正本) ----------
+# ---------- 索引(本机正本;path 为主键,相对 nas_root) ----------
+
+_FILES_DDL = """CREATE TABLE files(
+    path TEXT PRIMARY KEY,
+    filename TEXT NOT NULL,
+    thumb TEXT,
+    model TEXT DEFAULT '',
+    category TEXT DEFAULT '',
+    batch TEXT DEFAULT '',
+    workflow TEXT DEFAULT '',
+    prompt TEXT DEFAULT '',
+    seed INTEGER,
+    lora TEXT DEFAULT '',
+    tags TEXT DEFAULT '[]',
+    size INTEGER DEFAULT 0,
+    source TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+)"""
+
+
+def _migrate_v1(conn, lib_prefix):
+    """v1(文件名主键、library 根相对路径)→ v2(path 主键、nas 根相对路径)。"""
+    conn.executescript("ALTER TABLE files RENAME TO files_v1;")
+    conn.execute(_FILES_DDL)
+    conn.execute(
+        f"""INSERT OR REPLACE INTO files(path, filename, thumb, model, category,
+            batch, workflow, prompt, seed, lora, tags, size, source, created_at)
+            SELECT '{lib_prefix}/'||path, filename,
+                   CASE WHEN thumb THEN '{lib_prefix}/'||thumb END,
+                   model, category, batch, workflow, prompt, seed, '', tags, size,
+                   source, created_at
+            FROM files_v1""")
+    conn.execute("DROP TABLE files_v1")
+    conn.commit()
+
 
 def _lib_connect():
     conn = sqlite3.connect(db.DATA_DIR / "library.db", timeout=15)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("""CREATE TABLE IF NOT EXISTS files(
-        filename TEXT PRIMARY KEY,
-        path TEXT NOT NULL,
-        thumb TEXT,
-        model TEXT DEFAULT '',
-        category TEXT DEFAULT '',
-        batch TEXT DEFAULT '',
-        workflow TEXT DEFAULT '',
-        prompt TEXT DEFAULT '',
-        seed INTEGER,
-        tags TEXT DEFAULT '[]',
-        size INTEGER DEFAULT 0,
-        source TEXT DEFAULT '',
-        created_at TEXT DEFAULT (datetime('now','localtime'))
-    )""")
+    info = list(conn.execute("PRAGMA table_info(files)"))
+    pk_cols = {r[1] for r in info if r[5]}
+    if info and "path" not in pk_cols:  # v1(path 非主键)→ v2
+        _migrate_v1(conn, library_dir().name)
+    elif not info:
+        conn.execute(_FILES_DDL)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_files_created ON files(created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_files_filename ON files(filename)")
     return conn
 
 
 def indexed(filename):
     with _lock:
         row = _lib_connect().execute(
-            "SELECT * FROM files WHERE filename=?", (filename,)).fetchone()
+            "SELECT * FROM files WHERE filename=? LIMIT 1", (filename,)).fetchone()
     return dict(row) if row else None
 
 
-def _index_add(filename, rel_path, thumb, meta, tags, size, source):
+def get(rowid):
+    with _lock:
+        row = _lib_connect().execute(
+            "SELECT rowid, * FROM files WHERE rowid=?", (rowid,)).fetchone()
+    return dict(row) if row else None
+
+
+def _index_add(path, filename, thumb, model, category, batch, workflow,
+               prompt, seed, lora, tags, size, source, created_at=None):
     with _lock:
         conn = _lib_connect()
         conn.execute(
-            "INSERT OR REPLACE INTO files(filename,path,thumb,model,category,batch,"
-            "workflow,prompt,seed,tags,size,source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-            (filename, str(rel_path), thumb,
-             (meta or {}).get("model", ""), (meta or {}).get("category", ""),
-             (meta or {}).get("batch", ""), (meta.get("workflow") if meta else "") or "",
-             (meta or {}).get("prompt", ""), (meta or {}).get("seed"),
-             json.dumps(tags, ensure_ascii=False), size, source))
+            "INSERT OR REPLACE INTO files(path, filename, thumb, model, category, batch, "
+            "workflow, prompt, seed, lora, tags, size, source, created_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?, COALESCE(?, datetime('now','localtime')))",
+            (str(path), filename, thumb, model or "", category or "", batch or "",
+             workflow or "", prompt or "", seed, lora or "",
+             json.dumps(tags, ensure_ascii=False), size, source, created_at))
         conn.commit()
         conn.close()
 
@@ -173,10 +216,10 @@ def _index_remove(filename):
 
 
 def find_on_nas(filename, subfolder="", img_type="output"):
-    """读路径用:索引里的 NAS library 路径,或 output/ 根的未收编原位文件。"""
+    """/image 读路径用:索引里的 NAS 路径,或 output/ 根的未收编原位文件。"""
     row = indexed(filename)
     if row:
-        p = library_dir() / row["path"]
+        p = nas_root() / row["path"]
         try:
             if p.exists():
                 return p
@@ -191,44 +234,159 @@ def find_on_nas(filename, subfolder="", img_type="output"):
     return None
 
 
-# ---------- 缩略图(三级:本地缓存 → ComfyUI preview → NULL) ----------
+# ---------- 缩略图(Pillow 本地生成 → library/thumbs 平行树) ----------
 
-def thumb_for(filename, subfolder="", img_type="output"):
-    """返回 (bytes, 扩展名) 或 None。优先本机缩略图缓存,再试 ComfyUI preview。"""
-    from views.helpers import img_cache_get
-    for preview in ("webp;jpeg;70", "webp;jpeg;75"):
-        bp, _ct = img_cache_get(f"img:{img_type}:{subfolder}:{filename}:{preview}")
-        if bp:
-            try:
-                return bp.read_bytes(), ".webp"
-            except OSError:
-                continue
-    from comfy_client import ComfyError, client
+def thumb_generate(row):
+    """为索引行生成缩略图,返回 bytes 或 None;成功则更新索引。"""
     try:
-        r = client.download_image(filename, subfolder, img_type, "webp;jpeg;70")
-    except Exception:
+        from PIL import Image
+        src = nas_root() / row["path"]
+        with Image.open(src) as img:
+            img = img.convert("RGB")
+            img.thumbnail((THUMB_SIZE, THUMB_SIZE))
+            import io
+            buf = io.BytesIO()
+            img.save(buf, "WEBP", quality=75)
+            body = buf.getvalue()
+        thumb_rel = Path(library_dir().name) / "thumbs" / Path(row["path"]).with_suffix(".webp")
+        tdest = nas_root() / thumb_rel
+        tdest.parent.mkdir(parents=True, exist_ok=True)
+        tdest.write_bytes(body)
+        with _lock:
+            conn = _lib_connect()
+            conn.execute("UPDATE files SET thumb=? WHERE path=?", (str(thumb_rel), row["path"]))
+            conn.commit()
+            conn.close()
+        return body
+    except Exception as e:
+        print(f"缩略图生成失败 {row.get('filename')}: {e}")
         return None
-    body = r.content
-    r.close()
-    return body, ".webp"
 
 
-# ---------- 收编与放置 ----------
+def thumb_sweep(limit=6):
+    """补齐缺缩略图的行(后台线程低频调用)。返回生成数。"""
+    with _lock:
+        conn = _lib_connect()
+        rows = conn.execute(
+            "SELECT rowid, * FROM files WHERE thumb IS NULL LIMIT ?", (limit,)).fetchall()
+        conn.close()
+    done = 0
+    for r in rows:
+        if thumb_generate(dict(r)):
+            done += 1
+    return done
+
+
+# ---------- 全库摄取(output/ 手工子目录原地索引,不移动文件) ----------
+
+def ingest_refresh():
+    """扫描 output/ 全部子目录,把新/变更图片索引进来(不移动)。
+
+    有任务记录的文件名顺带补全元数据;全部无变更时零写入。返回新增/更新数。
+    """
+    out = output_dir()
+    changed = 0
+    try:
+        with _lock:
+            conn = _lib_connect()
+            like = output_dir().name + "/%"
+            known = {r["path"]: (r["size"], r["created_at"]) for r in conn.execute(
+                "SELECT path, size, created_at FROM files WHERE path LIKE ?", (like,))}
+            conn.close()
+        for sub in sorted(p for p in out.iterdir() if p.is_dir()):
+            for f in sub.rglob("*"):
+                if not f.is_file() or f.suffix.lower() not in LIB_EXTENSIONS:
+                    continue
+                rel = f.relative_to(nas_root())
+                try:
+                    st = f.stat()
+                except OSError:
+                    continue
+                ctime = datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+                if str(rel) in known and known[str(rel)] == (st.st_size, ctime):
+                    continue
+                meta = lookup_task_meta(f.name)
+                dirname = sub.name
+                if meta:
+                    model = meta.get("model") or dirname
+                    tags = [t for t in (dirname, meta.get("category"),
+                                        meta.get("batch"), meta.get("workflow")) if t]
+                else:
+                    model, tags = dirname, [dirname]
+                _index_add(rel, f.name, None, model, meta.get("category") if meta else "",
+                           meta.get("batch") if meta else "",
+                           meta.get("workflow") if meta else "",
+                           meta.get("prompt") if meta else "",
+                           meta.get("seed") if meta else "",
+                           meta.get("lora") if meta else "",
+                           tags, st.st_size, "ingest", ctime)
+                changed += 1
+    except OSError as e:
+        print(f"全库摄取失败: {e}")
+    return changed
+
+
+# ---------- 画廊查询 ----------
+
+def page_query(where, args, page, per_page):
+    """分页查询(画廊数据源)。where 为已参数化的条件子串(可为空)。"""
+    base = "FROM files"
+    if where:
+        base += " WHERE " + where
+    with _lock:
+        conn = _lib_connect()
+        total = conn.execute(f"SELECT COUNT(*) {base}", args).fetchone()[0]
+        rows = conn.execute(
+            f"SELECT rowid, * {base} ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?",
+            (*args, per_page, (page - 1) * per_page)).fetchall()
+        conn.close()
+    return [dict(r) for r in rows], total
+
+
+def filter_options():
+    """筛选下拉的可选项(模型/工作流/类型/批次/LoRA)。"""
+    with _lock:
+        conn = _lib_connect()
+
+        def col(name):
+            return [r[0] for r in conn.execute(
+                f"SELECT DISTINCT {name} FROM files WHERE {name}!='' ORDER BY 1")]
+        opts = {k: col(k) for k in ("model", "workflow", "category", "batch", "lora")}
+        conn.close()
+    return opts
+
 
 def lookup_task_meta(filename):
     """按文件名在 comfyweb 库里找最近一条任务归属(images→tasks)。"""
     row = db.query_one(
         "SELECT t.model, t.category, t.batch, t.workflow_name, t.prompt_text, "
-        "t.seed, t.created_at FROM images i JOIN tasks t ON t.id=i.task_id "
+        "t.seed, t.lora, t.created_at FROM images i JOIN tasks t ON t.id=i.task_id "
         "WHERE i.filename=? AND i.type='output' ORDER BY i.id DESC LIMIT 1",
         (filename,))
-    return dict(row) if row else None
+    if not row:
+        return None
+    m = dict(row)
+    m["workflow"] = m.pop("workflow_name", "") or ""
+    m["prompt"] = m.pop("prompt_text", "") or ""
+    return m
+
+
+def task_img_id_map(filenames):
+    """文件名 → {img_id, fav}(画廊卡片链接旧详情页与收藏角标用;一次查询)。"""
+    names = [f for f in filenames if f]
+    if not names:
+        return {}
+    marks = ",".join("?" * len(names))
+    rows = db.query(
+        f"SELECT filename, MIN(id) AS img_id, MAX(fav) AS fav FROM images "
+        f"WHERE filename IN ({marks}) GROUP BY filename", names)
+    return {r["filename"]: {"img_id": r["img_id"], "fav": bool(r["fav"])} for r in rows}
 
 
 def place(local_path: Path, filename, source="archive"):
-    """把本地已有文件放入 library 树(分类 + 复制 + 缩略图 + 索引)。
+    """把本地已有文件放入 library 树(分类 + 复制 + 缩略图延后 + 索引)。
 
-    library 已有同名同尺寸文件时跳过复制,只补索引。返回相对路径。
+    library 已有不低于本地质量的副本时跳过复制,只补索引。返回相对 nas_root 的路径。
     """
     meta = lookup_task_meta(filename)
     parent, tags = classify(filename, meta)
@@ -239,16 +397,12 @@ def place(local_path: Path, filename, source="archive"):
     # 目标已有不低于本地质量的副本时不覆盖(防缩略图替身降级覆盖全画质原图)
     if not (dest.exists() and dest.stat().st_size >= size):
         shutil.copyfile(local_path, dest)
-    rel = dest.relative_to(library_dir())
-    thumb_rel = None
-    th = thumb_for(filename)
-    if th:
-        tdest = library_dir() / "thumbs" / rel.parent / (dest.stem + th[1])
-        tdest.parent.mkdir(parents=True, exist_ok=True)
-        if not tdest.exists():
-            tdest.write_bytes(th[0])
-        thumb_rel = str(tdest.relative_to(library_dir()))
-    _index_add(filename, rel, thumb_rel, meta, tags, size, source)
+    rel = Path(library_dir().name) / dest.relative_to(library_dir())
+    _index_add(rel, filename, None,
+               meta.get("model") if meta else "", meta.get("category") if meta else "",
+               meta.get("batch") if meta else "", meta.get("workflow") if meta else "",
+               meta.get("prompt") if meta else "", meta.get("seed") if meta else "",
+               meta.get("lora") if meta else "", tags, size, source)
     return rel
 
 
@@ -280,20 +434,12 @@ def collect_once(limit=50):
         except OSError as e:
             print(f"收编移动失败 {p.name}: {e}")
             continue
-        rel = dest.relative_to(library_dir())
-        thumb_rel = None
-        th = thumb_for(p.name)
-        if th:
-            tdest = library_dir() / "thumbs" / rel.parent / (dest.stem + th[1])
-            tdest.parent.mkdir(parents=True, exist_ok=True)
-            if not tdest.exists():
-                try:
-                    tdest.write_bytes(th[0])
-                except OSError:
-                    thumb_rel = None
-            if tdest.exists():
-                thumb_rel = str(tdest.relative_to(library_dir()))
-        _index_add(p.name, rel, thumb_rel, meta, tags,
+        rel = Path(library_dir().name) / dest.relative_to(library_dir())
+        _index_add(rel, p.name, None,
+                   meta.get("model") if meta else "", meta.get("category") if meta else "",
+                   meta.get("batch") if meta else "", meta.get("workflow") if meta else "",
+                   meta.get("prompt") if meta else "", meta.get("seed") if meta else "",
+                   meta.get("lora") if meta else "", tags,
                    dest.stat().st_size, "collect")
         moved += 1
     return moved, skipped
@@ -328,26 +474,33 @@ def reverse(filename):
     row = indexed(filename)
     if not row:
         return False
-    lib_file = library_dir() / row["path"]
+    lib_file = nas_root() / row["path"]
     out = output_dir() / filename
     out.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(lib_file), str(out))
     if row["thumb"]:
-        (library_dir() / row["thumb"]).unlink(missing_ok=True)
+        (nas_root() / row["thumb"]).unlink(missing_ok=True)
     _index_remove(filename)
     return True
 
 
 def status():
-    """设置页展示:索引张数/未分类数/最后快照时间/待收编数。"""
-    n = un = 0
+    """设置页展示:索引张数/未分类/已摄取/待缩略图/最后快照时间/待收编数。"""
+    n = un = ing = nothumb = 0
     last = ""
     try:
         with _lock:
             conn = _lib_connect()
             n = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+            lib_like = library_dir().name + "/%"
             un = conn.execute(
-                "SELECT COUNT(*) FROM files WHERE path LIKE '未分类/%'").fetchone()[0]
+                "SELECT COUNT(*) FROM files WHERE path LIKE ? AND path LIKE '%/未分类/%'",
+                (lib_like,)).fetchone()[0]
+            ing = conn.execute(
+                "SELECT COUNT(*) FROM files WHERE path LIKE ?",
+                (output_dir().name + "/%",)).fetchone()[0]
+            nothumb = conn.execute(
+                "SELECT COUNT(*) FROM files WHERE thumb IS NULL").fetchone()[0]
             conn.close()
     except Exception:
         pass
@@ -364,5 +517,5 @@ def status():
                       and not indexed(p.name))
     except OSError:
         pass
-    return {"indexed": n, "unclassified": un, "last_snapshot": last,
-            "pending": pending}
+    return {"indexed": n, "unclassified": un, "ingested": ing, "no_thumb": nothumb,
+            "last_snapshot": last, "pending": pending}

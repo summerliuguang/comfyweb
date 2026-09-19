@@ -21,7 +21,9 @@ SLOW_WRITE_SECONDS = 5                 # library 单文件写入超过此秒数�
 PENALTY_SECONDS = 300                  # 慢/失败后的冷却期,期间跳过 NAS 写入
 SCAN_INTERVAL = 600                    # 全量补拉扫描间隔(秒)
 COLLECT_INTERVAL = 300                 # output 收编扫描间隔(秒)
+INGEST_INTERVAL = 900                  # 全库摄取(手工子目录)扫描间隔(秒)
 SNAPSHOT_MIN_INTERVAL = 120            # 索引快照最小间隔(秒)
+TICK_SECONDS = 15                      # 工作线程节拍
 
 log = logging.getLogger("comfyweb")
 
@@ -233,6 +235,7 @@ def trigger_sync():
 def _loop():
     last_scan = 0.0
     last_collect = 0.0
+    last_ingest = 0.0
     last_snapshot = 0.0
     while True:
         global _index_dirty
@@ -259,6 +262,16 @@ def _loop():
                     log.info("收编 output 图片 %d 张入库", moved)
                     _index_dirty = True
                 last_collect = time.time()
+            if remote_ready() and time.time() - last_ingest > INGEST_INTERVAL:
+                changed = library.ingest_refresh()
+                if changed:
+                    log.info("全库摄取:新增/更新 %d 张索引", changed)
+                    _index_dirty = True
+                last_ingest = time.time()
+            if remote_ready():
+                done = library.thumb_sweep(limit=6)  # 逐批补齐缺缩略图的行
+                if done:
+                    _index_dirty = True
             sync_pending()
             if _index_dirty and remote_ready() and time.time() - last_snapshot > SNAPSHOT_MIN_INTERVAL:
                 try:

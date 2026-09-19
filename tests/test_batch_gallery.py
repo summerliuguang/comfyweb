@@ -25,6 +25,7 @@ def setUpModule():
 
 
 def _seed_task(prompt, batch, category):
+    """种一条任务+图片记录,并经 library.place 真实入索引(模拟归档线程完成后的状态)。"""
     cur = db.execute(
         "INSERT INTO tasks(workflow_name, prompt_text, model, batch, category, status) "
         "VALUES('批量生成', ?, 'm.safetensors', ?, ?, 'done')",
@@ -33,6 +34,10 @@ def _seed_task(prompt, batch, category):
     cur = db.execute(
         "INSERT INTO images(task_id, filename, subfolder, type) VALUES(?,?, '', 'output')",
         (tid, f"{prompt}.png"))
+    f = Path(tempfile.mkdtemp()) / f"{prompt}.png"
+    f.write_bytes(b"IMG")
+    import library
+    library.place(f, f"{prompt}.png")
     return cur.lastrowid
 
 
@@ -60,10 +65,13 @@ class BatchGalleryFilters(unittest.TestCase):
             self.assertEqual(d["category"], "立绘")
             self.assertEqual(d["batch"], "修仙批次")
         finally:
+            import library
             for i in (img_a, img_b, img_c):
                 db.execute("DELETE FROM images WHERE id=?", (i,))
                 db.execute("DELETE FROM tasks WHERE prompt_text IN "
                            "('仙子立绘','丹炉特写','坊市街道')")
+            for fn in ("仙子立绘.png", "丹炉特写.png", "坊市街道.png"):
+                library._index_remove(fn)
 
 
 class Favorites(unittest.TestCase):
@@ -98,8 +106,10 @@ class Favorites(unittest.TestCase):
             r = client_app.post("/api/gallery/image/99999999/fav")
             self.assertEqual(r.status_code, 404)
         finally:
+            import library
             db.execute("DELETE FROM images WHERE id=?", (img,))
             db.execute("DELETE FROM tasks WHERE prompt_text='收藏测试图'")
+            library._index_remove("收藏测试图.png")
 
 
 if __name__ == "__main__":

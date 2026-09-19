@@ -40,8 +40,10 @@ def setUpModule():
     # 归档线程常驻测试进程:library_dir 必须钉死在临时目录,
     # 任何用例结束后还原到此值——绝不能还原为空(空=默认真实 NAS)
     global TEST_LIB_DIR
-    TEST_LIB_DIR = tempfile.mkdtemp(prefix="comfyweb-testlib-")
+    TEST_LIB_DIR = str(Path(tempfile.mkdtemp(prefix="comfyweb-testlib-")) / "library")
     db.set_setting("library_dir", TEST_LIB_DIR)
+    import storage
+    storage.remote_enabled = lambda: True  # 测试库不在挂载点下,声明远端可用以走完整归档链
     import app  # 延迟导入:确保上面已切换测试数据目录
     app.app.config["TESTING"] = True
     global client_app
@@ -98,10 +100,14 @@ class ApiSmoke(unittest.TestCase):
         r = self.c.get(img_url + "&dl=1")
         self.assertEqual(r.status_code, 200)
         self.assertIn("attachment", r.headers.get("Content-Disposition", ""))
-        # 画廊出现该任务图片
-        gal = self.c.get("/gallery")
-        self.assertEqual(gal.status_code, 200)
-        self.assertIn("a cat", gal.get_data(as_text=True))
+        # 画廊出现该任务图片(归档线程异步入索引,轮询等待)
+        gal = ""
+        for _ in range(30):
+            gal = self.c.get("/gallery").get_data(as_text=True)
+            if "a cat" in gal:
+                break
+            time.sleep(1)
+        self.assertIn("a cat", gal)
         # 清理
         self.c.post(f"/api/workflows/{wid}/delete")
 
@@ -240,7 +246,7 @@ class ApiSmoke(unittest.TestCase):
             self.assertTrue(local.exists())                       # 本地缓冲必落
             row = __import__("library").indexed("arch-test.png")
             self.assertIsNotNone(row)                             # 已入索引
-            lib_file = lib / row["path"]
+            lib_file = Path(lib).parent / row["path"]
             self.assertTrue(lib_file.exists())                    # library 副本在
             self.assertEqual(st.find_archived("arch-test.png", "", "output"), local)
             local.unlink()
@@ -278,7 +284,7 @@ class ApiSmoke(unittest.TestCase):
             st.sync_pending()
             row = __import__("library").indexed("degraded.png")
             self.assertIsNotNone(row)
-            self.assertTrue((lib / row["path"]).exists())
+            self.assertTrue((Path(lib).parent / row["path"]).exists())
         finally:
             db.set_setting("library_dir", TEST_LIB_DIR)
             st._penalty_until = 0.0

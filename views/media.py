@@ -5,6 +5,7 @@
 读路径:已归档的原图(本地 data/images → 可配置存储目录)优先,未归档的回源 ComfyUI。
 """
 import os
+from pathlib import Path
 from urllib.parse import quote as urlquote
 from uuid import uuid4
 
@@ -114,3 +115,47 @@ def image_proxy():
 
 def register(app):
     app.register_blueprint(bp)
+
+
+# ---------- 整理库媒体(画廊全量浏览;rowid 寻址,无路径输入面) ----------
+
+@bp.get("/libthumb/<int:rowid>")
+def lib_thumb(rowid):
+    """整理库缩略图:本地缓存 → NAS thumbs → 现场生成(Pillow)并回填。"""
+    import library
+    row = library.get(rowid)
+    if not row:
+        return err("图片不存在", 404)
+    ck = "libthumb:" + row["path"]
+    cached_path, cached_ct = img_cache_get(ck)
+    if cached_path:
+        return Response(cached_path.read_bytes(), content_type=cached_ct or "image/webp",
+                        headers={"Cache-Control": "public, max-age=604800"})
+    body = None
+    if row["thumb"]:
+        try:
+            body = (library.nas_root() / row["thumb"]).read_bytes()
+        except OSError:
+            body = None
+    if body is None:
+        body = library.thumb_generate(row)  # 现场生成并回填索引/NAS
+        if body is None:
+            return err("缩略图不可用", 404)
+    img_cache_store(ck, body, "image/webp")
+    return Response(body, content_type="image/webp",
+                    headers={"Cache-Control": "public, max-age=604800"})
+
+
+@bp.get("/libmedia/<int:rowid>")
+def lib_media(rowid):
+    """整理库原图(查看/下载)。"""
+    import library
+    row = library.get(rowid)
+    if not row:
+        return err("图片不存在", 404)
+    try:
+        body = (library.nas_root() / row["path"]).read_bytes()
+    except OSError:
+        return err("图片文件不可读(NAS 未挂载或已移动)", 502)
+    ctype = _sniff_ctype(body[:16], _CTYPE.get(Path(row["path"]).suffix.lower(), "image/png"))
+    return Response(body, content_type=ctype, headers=_download_headers(row["filename"]))

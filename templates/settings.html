@@ -274,7 +274,8 @@
     try {
       const d = await api('/api/storage');
       $('imgDir').value = d.dir || '';
-      box.textContent = `索引 ${d.indexed || 0} 张(未分类 ${d.unclassified || 0})` +
+      box.textContent = `索引 ${d.indexed || 0} 张(未分类 ${d.unclassified || 0} · 手工目录 ${d.ingested || 0})` +
+        ` · 缺缩略图 ${d.no_thumb || 0}` +
         ` · 本地缓冲 ${d.local_files}` + (d.pending ? ` · 待入库 ${d.pending}` : '') +
         ` · 待收编 ${d.pending_collect || 0}` +
         (d.last_snapshot ? ` · 快照 ${d.last_snapshot}` : '') +

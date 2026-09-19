@@ -55,16 +55,18 @@
 
   {% if not items %}
   <div class="empty">
-    {% if q or cur.get('wf') or cur.get('model') or cur.get('lora') or cur.get('cat') or cur.get('batch') %}没有符合条件的图片。{% else %}还没有生成过图片。{% endif %}
+    {% if q or cur.get('wf') or cur.get('model') or cur.get('lora') or cur.get('cat') or cur.get('batch') %}没有符合条件的图片。{% else %}还没有图片入库。{% endif %}
   </div>
   {% else %}
   <div class="masonry">
     {% for it in items %}
-    <a class="gitem" href="/gallery/image/{{ it.id }}{% if qs %}?{{ qs }}{% endif %}">
-      <img src="{{ it.thumb }}" loading="lazy" alt="生成图片">
-      <button class="fav-btn{{ ' on' if it.fav }}" type="button" data-fav="{{ it.id }}"
+    <a class="gitem" {% if it.task_img_id %}href="/gallery/image/{{ it.task_img_id }}{% if qs %}?{{ qs }}{% endif %}"{% else %}href="{{ it.url }}" data-lib="1"{% endif %}>
+      <img src="{{ it.thumb }}" loading="lazy" alt="图片">
+      {% if it.task_img_id %}
+      <button class="fav-btn{{ ' on' if it.fav }}" type="button" data-fav="{{ it.task_img_id }}"
         title="{{ '取消收藏' if it.fav else '收藏' }}">{% if it.fav %}<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" stroke="none" aria-hidden="true"><path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.6 9.7l5.8-.8z"/></svg>{% else %}<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.6 9.7l5.8-.8z"/></svg>{% endif %}</button>
-      <div class="gmeta" title="{{ it.prompt_text }}">{{ it.prompt_text or it.workflow_name or '(无提示词)' }}</div>
+      {% endif %}
+      <div class="gmeta" title="{{ it.label }}">{{ it.label or '(未分类)' }}</div>
     </a>
     {% endfor %}
   </div>
@@ -92,6 +94,23 @@ document.querySelector('.masonry').addEventListener('click', async (e) => {
   btn.classList.toggle('on', d.fav);
   btn.innerHTML = d.fav ? "<svg viewBox=\"0 0 24 24\" width=\"14\" height=\"14\" fill=\"currentColor\" stroke=\"none\" aria-hidden=\"true\"><path d=\"M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.6 9.7l5.8-.8z\"/></svg>" : "<svg viewBox=\"0 0 24 24\" width=\"14\" height=\"14\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.6 9.7l5.8-.8z\"/></svg>";
   btn.title = d.fav ? '取消收藏' : '收藏';
+});
+/* 非任务图(手工/未分类):页内灯箱看原图,点图或背景关闭 */
+document.querySelector('.masonry').addEventListener('click', (e) => {
+  const a = e.target.closest('a[data-lib]');
+  if (!a) return;
+  e.preventDefault();
+  let lb = document.getElementById('libLb');
+  if (!lb) {
+    lb = document.createElement('div');
+    lb.id = 'libLb';
+    lb.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.88);z-index:99;display:flex;align-items:center;justify-content:center;cursor:zoom-out';
+    lb.innerHTML = '<img style="max-width:96%;max-height:94%;border-radius:6px" alt="">';
+    document.body.appendChild(lb);
+    lb.addEventListener('click', () => { lb.style.display = 'none'; });
+  }
+  lb.style.display = 'flex';
+  lb.querySelector('img').src = a.getAttribute('href');
 });
 </script>
 <script>
