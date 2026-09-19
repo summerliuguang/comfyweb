@@ -106,6 +106,13 @@ def api_status():
     return {"ws": client.ws_state, "last_event": client.last_event_ts}
 
 
+@bp.post("/api/reconnect")
+def api_reconnect():
+    """手动重连 ComfyUI(WS 连续失败达上限后由用户触发)。"""
+    client.reset_reconnect()
+    return {"ok": True, "ws": client.ws_state}
+
+
 # ---------- 队列(设置页) ----------
 
 @bp.get("/api/queue")

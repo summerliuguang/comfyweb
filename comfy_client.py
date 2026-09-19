@@ -69,11 +69,16 @@ def reconcile_active_tasks(rows):
             pass
 
 
+WS_RETRY_LIMIT = 3       # 连续失败次数上限,超过即停止重连,等用户手动重连
+WS_RETRY_INTERVAL = 20   # 重试间隔(秒)
+
+
 class ComfyClient:
     def __init__(self):
         self._ws_thread = None
         self._stop = threading.Event()
         self._lock = threading.Lock()
+        self._ws_fail_count = 0   # 连续失败计数,连上即清零
         self.ws_state = "未启动"
         self.last_event_ts = 0.0
         self.on_connect = None  # WS 连上后回调(后台线程执行),供上层预热缓存
@@ -292,8 +297,12 @@ class ComfyClient:
     def _ws_loop(self):
         import websocket
 
-        delay = 3.0  # 指数退避:连续失败 3s→30s 封顶,连上即恢复 3s
+        # 重连策略(用户设定):连续失败 WS_RETRY_LIMIT 次、每次间隔 WS_RETRY_INTERVAL
+        # 秒即放弃,状态停在"连接失败,请手动重连";设置页「重连」按钮或重启服务可恢复
         while not self._stop.is_set():
+            if self._ws_fail_count >= WS_RETRY_LIMIT:
+                self.ws_state = "连接失败,请手动重连"
+                return
             connected = False
             try:
                 base = self.base_url()
@@ -308,7 +317,7 @@ class ComfyClient:
                 ws = websocket.create_connection(
                     ws_url, timeout=10, sslopt=sslopt if sslopt else None)
                 connected = True
-                delay = 3.0
+                self._ws_fail_count = 0
                 self.ws_state = "已连接"
                 if self.on_connect:
                     threading.Thread(target=self.on_connect, daemon=True).start()
@@ -326,7 +335,11 @@ class ComfyClient:
             except ComfyError:
                 self.ws_state = "地址未配置或不可达"
             except Exception:
-                self.ws_state = "已断开,正在重连"
+                self._ws_fail_count += 1
+                if self._ws_fail_count < WS_RETRY_LIMIT:
+                    self.ws_state = f"连接失败({self._ws_fail_count}/{WS_RETRY_LIMIT}),将重试"
+                else:
+                    self.ws_state = "连接失败,请手动重连"
             finally:
                 if ws is not None:
                     try:
@@ -335,9 +348,18 @@ class ComfyClient:
                         pass
             if self._stop.is_set():
                 break
-            self._stop.wait(3.0 if connected else delay)
-            if not connected:
-                delay = min(delay * 2, 30.0)
+            if connected:
+                self._stop.wait(3.0)
+            elif self._ws_fail_count >= WS_RETRY_LIMIT:
+                self.ws_state = "连接失败,请手动重连"
+                return
+            else:
+                self._stop.wait(WS_RETRY_INTERVAL)
+
+    def reset_reconnect(self):
+        """手动重连:清零失败计数并确保 WS 线程在跑。"""
+        self._ws_fail_count = 0
+        self.ensure_ws()
 
     def _handle_event(self, msg):
         etype = msg.get("type")

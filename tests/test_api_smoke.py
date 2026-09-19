@@ -340,6 +340,18 @@ class ApiSmoke(unittest.TestCase):
             client.download_image = orig
             (st.LOCAL_DIR / "output/lostimg.png").unlink(missing_ok=True)
 
+    def test_reconnect_resets_fail_count(self):
+        """WS 连续失败达上限后,手动重连端点应清零计数并恢复线程。"""
+        from comfy_client import client
+        client._ws_fail_count = 3
+        client.ws_state = "连接失败,请手动重连"
+        try:
+            r = self.c.post("/api/reconnect")
+            self.assertEqual(r.status_code, 200)
+            self.assertEqual(client._ws_fail_count, 0)
+        finally:
+            client._ws_fail_count = 0
+
     def test_feature_flags(self):
         """ENABLE_* 作为初始默认:置 0 后对应路由 404、菜单隐藏,其余模块不受影响。"""
         import os
