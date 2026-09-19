@@ -245,6 +245,13 @@ class ComfyClient:
             self._mark(prompt_id, "error", error or "执行出错")
             return
         self._insert_images(rows[0]["id"], images)
+        try:  # 原图归档到可配置存储目录(后台线程,失败不影响任务状态)
+            import storage
+            for filename, subfolder, img_type in images:
+                if img_type == "output" and filename:
+                    storage.enqueue(filename, subfolder, img_type)
+        except Exception:
+            pass
         final = forced_status or "done"
         db.execute(
             "UPDATE tasks SET status=?, error=?, progress=100, finished_at=datetime('now','localtime') "

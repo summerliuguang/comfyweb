@@ -49,6 +49,25 @@ def api_save_settings():
         except (TypeError, ValueError):
             keep = 200
         db.set_setting("record_keep", str(keep))
+    if "library_dir" in data:
+        raw = (data.get("library_dir") or "").strip()
+        if raw:
+            import os as _os
+            p = _os.path.expanduser(raw)
+            if not _os.path.isabs(raw):
+                return err("整理库目录必须是绝对路径(留空则用默认 servershare/comfyui/library)")
+            try:
+                _os.makedirs(p, exist_ok=True)
+            except OSError as e:
+                return err(f"目录不可创建: {e}")
+            db.set_setting("library_dir", raw)
+        else:
+            db.set_setting("library_dir", "")  # 空 = 默认 ~/servershare/comfyui/library
+        try:
+            import storage
+            storage.trigger_sync()
+        except ImportError:
+            pass
     try:
         import civitai
         civitai.clear_cache()
@@ -149,6 +168,21 @@ def api_features_set():
     enabled = bool(d.get("enabled"))
     db.set_setting("enable_" + name, "1" if enabled else "0")
     return {"ok": True, "feature": name, "enabled": enabled}
+
+
+@bp.get("/api/storage")
+def api_storage_status():
+    """图片存储:配置目录/挂载/降级状态/本地缓存数/待同步数。"""
+    import storage
+    return storage.status()
+
+
+@bp.post("/api/storage/sync")
+def api_storage_sync():
+    """立即触发一轮补拉扫描与本地→存储目录同步。"""
+    import storage
+    storage.trigger_sync()
+    return {"ok": True}
 
 
 @bp.get("/api/host/stats")

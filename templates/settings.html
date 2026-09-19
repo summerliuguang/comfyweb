@@ -83,6 +83,21 @@
 </div>
 
 <div class="panel">
+  <h2 class="title is-5">图片库(NAS)</h2>
+  <div class="field">
+    <label class="label">整理库目录</label>
+    <input class="input" id="imgDir" type="text" placeholder="默认 ~/servershare/comfyui/library(模型/任务 分类树 + 索引 + 缩略图)">
+    <p class="hint">生成的原图自动归档:先落本地缓冲(降级保险),再分类放入整理库并收编 output/ 的平铺图。查看/下载原图按 本地缓冲 → 整理库 → output → ComfyUI 顺序回退。</p>
+  </div>
+  <div class="buttons">
+    <button class="button is-link is-small" id="btnImgDirSave">保存目录</button>
+    <button class="button is-light is-small" id="btnImgSync">立即收编/同步</button>
+    <span class="status" id="imgStatus"></span>
+  </div>
+  <p class="task-err" id="imgError" hidden></p>
+</div>
+
+<div class="panel">
   <h2 class="title is-5">队列</h2>
   <div class="buttons">
     <button class="button is-small" id="btnQueueRefresh">刷新</button>
@@ -252,6 +267,37 @@
     try { await api('/api/queue/interrupt', { method: 'POST' }); loadQueue(); }
     catch (e) { alert('中断失败: ' + e.message); }
   });
+
+  /* ---------- 图片库 ---------- */
+  async function loadImgStorage() {
+    const box = $('imgStatus');
+    try {
+      const d = await api('/api/storage');
+      $('imgDir').value = d.dir || '';
+      box.textContent = `索引 ${d.indexed || 0} 张(未分类 ${d.unclassified || 0})` +
+        ` · 本地缓冲 ${d.local_files}` + (d.pending ? ` · 待入库 ${d.pending}` : '') +
+        ` · 待收编 ${d.pending_collect || 0}` +
+        (d.last_snapshot ? ` · 快照 ${d.last_snapshot}` : '') +
+        (d.degraded ? ' · [NAS 慢,已降级本地]' : '') + (d.remote ? ' · 已挂载' : ' · 本地模式');
+      box.classList.toggle('bad', !!d.degraded);
+    } catch (e) { box.textContent = '状态加载失败: ' + e.message; }
+  }
+  $('btnImgDirSave').addEventListener('click', async () => {
+    const errBox = $('imgError');
+    errBox.hidden = true;
+    try {
+      await api('/api/settings', { method: 'POST',
+        body: JSON.stringify({ library_dir: $('imgDir').value }) });
+      await loadImgStorage();
+    } catch (e) { errBox.textContent = e.message; errBox.hidden = false; }
+  });
+  $('btnImgSync').addEventListener('click', async () => {
+    try {
+      await api('/api/storage/sync', { method: 'POST' });
+      setTimeout(loadImgStorage, 2000);
+    } catch (e) { alert('触发失败: ' + e.message); }
+  });
+  loadImgStorage();
 
   /* ---------- 功能开关 ---------- */
   const FEATURE_LABELS = {

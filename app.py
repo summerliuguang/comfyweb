@@ -108,6 +108,12 @@ def create_app():
 
     client.ensure_ws()
 
+    try:  # 图片归档线程(存储目录可配;失败只影响归档,不影响主功能)
+        import storage
+        storage.start()
+    except Exception:
+        logging.getLogger("comfyweb").exception("图片归档线程启动失败")
+
     # WS 连上后预热各模块缓存(60s 节流;单个模块预热失败不影响其他)
     _last_warm = [0.0]
 

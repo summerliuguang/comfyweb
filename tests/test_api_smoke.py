@@ -37,6 +37,11 @@ def setUpModule():
     time.sleep(1.2)
     db.init_db()
     db.set_setting("comfy_url", "http://127.0.0.1:5099")
+    # 归档线程常驻测试进程:library_dir 必须钉死在临时目录,
+    # 任何用例结束后还原到此值——绝不能还原为空(空=默认真实 NAS)
+    global TEST_LIB_DIR
+    TEST_LIB_DIR = tempfile.mkdtemp(prefix="comfyweb-testlib-")
+    db.set_setting("library_dir", TEST_LIB_DIR)
     import app  # 延迟导入:确保上面已切换测试数据目录
     app.app.config["TESTING"] = True
     global client_app
@@ -220,6 +225,114 @@ class ApiSmoke(unittest.TestCase):
             self.assertEqual(vbatch._batch_default_model(), "deepseek-flash")
         finally:
             vai._fetch_ai_models, vbatch.cached = orig_fetch, orig_cached
+
+    def test_storage_roundtrip_and_fallback(self):
+        """归档写本地缓冲 + library 分类树;读路径本地→library→ComfyUI 回退。"""
+        import storage as st
+        import tempfile
+        lib = Path(tempfile.mkdtemp(prefix="comfyweb-lib-"))
+        db.set_setting("library_dir", str(lib))
+        orig_remote = st.remote_enabled
+        st.remote_enabled = lambda: True  # 测试临时目录不在额外挂载点下,直接声明远端可用
+        try:
+            st._archive_one("arch-test.png", "", "output")
+            local = st.LOCAL_DIR / "output/arch-test.png"
+            self.assertTrue(local.exists())                       # 本地缓冲必落
+            row = __import__("library").indexed("arch-test.png")
+            self.assertIsNotNone(row)                             # 已入索引
+            lib_file = lib / row["path"]
+            self.assertTrue(lib_file.exists())                    # library 副本在
+            self.assertEqual(st.find_archived("arch-test.png", "", "output"), local)
+            local.unlink()
+            self.assertEqual(st.find_archived("arch-test.png", "", "output"), lib_file)
+            # 读路径:归档命中直接回文件
+            r = self.c.get("/image?filename=arch-test.png")
+            self.assertEqual(r.status_code, 200)
+        finally:
+            db.set_setting("library_dir", TEST_LIB_DIR)
+            st.remote_enabled = orig_remote
+
+    def test_storage_traversal_rejected(self):
+        """归档路径组件含 .. 或空文件名时拒绝,不落盘。"""
+        import storage as st
+        self.assertIsNone(st._rel_path("../../etc/passwd", "", "output"))
+        self.assertIsNone(st._rel_path("a\\..\\..\\x.png", "..", "output"))
+        self.assertIsNone(st._rel_path("", "", "output"))
+
+    def test_storage_degraded_falls_back_local(self):
+        """library 冷却期(降级)时:只写本地累积;恢复后 sync_pending 补入库。"""
+        import storage as st
+        import tempfile
+        lib = Path(tempfile.mkdtemp(prefix="comfyweb-lib-"))
+        db.set_setting("library_dir", str(lib))
+        orig_remote = st.remote_enabled
+        st.remote_enabled = lambda: True
+        st._penalty_until = time.time() + 9999  # 模拟慢写冷却
+        try:
+            st._archive_one("degraded.png", "", "output")
+            local = st.LOCAL_DIR / "output/degraded.png"
+            self.assertTrue(local.exists())
+            self.assertIsNone(__import__("library").indexed("degraded.png"))
+            self.assertTrue(st.status()["degraded"])
+            st._penalty_until = 0.0
+            st.sync_pending()
+            row = __import__("library").indexed("degraded.png")
+            self.assertIsNotNone(row)
+            self.assertTrue((lib / row["path"]).exists())
+        finally:
+            db.set_setting("library_dir", TEST_LIB_DIR)
+            st._penalty_until = 0.0
+            st.remote_enabled = orig_remote
+
+    def test_storage_thumb_fallback_when_original_missing(self):
+        """原图在 ComfyUI 侧已删除(404)时,用缩略图缓存做归档副本。"""
+        import storage as st
+        from comfy_client import ComfyError, client
+        from views.helpers import img_cache_store
+        img_cache_store("img:output::gone.png:webp;jpeg;70",
+                        b"RIFF\x00\x00\x00\x00WEBPfake", "image/webp")
+        orig = client.download_image
+
+        def boom(*a, **k):
+            raise ComfyError("取图失败: ComfyUI 返回 404")
+        client.download_image = boom
+        try:
+            st._archive_one("gone.png", "", "output")
+        finally:
+            client.download_image = orig
+        p = st.LOCAL_DIR / "output/gone.png"
+        self.assertTrue(p.exists())
+        self.assertEqual(p.read_bytes(), b"RIFF\x00\x00\x00\x00WEBPfake")
+
+    def test_preview_falls_back_to_archive(self):
+        """缩略图请求在 ComfyUI 404 时回退归档副本,并回填缩略图缓存自愈。"""
+        import storage as st
+        from comfy_client import ComfyError, client
+        from views.helpers import img_cache_get, img_cache_store
+        st.LOCAL_DIR.joinpath("output").mkdir(parents=True, exist_ok=True)
+        (st.LOCAL_DIR / "output/lostimg.png").write_bytes(b"RIFF\x00\x00\x00\x00WEBPfake")
+        key = "img:output::lostimg.png:webp;jpeg;70"
+        img_cache_store(key, b"old-stale-bytes", "image/webp")
+        from views.helpers import _img_cache_paths
+        cp, _ = _img_cache_paths(key)
+        cp.unlink(missing_ok=True)  # 模拟缩略图缓存被淘汰
+
+        orig = client.download_image
+
+        def boom(*a, **k):
+            raise ComfyError("取图失败: ComfyUI 返回 404")
+        client.download_image = boom
+        try:
+            r = self.c.get("/image?filename=lostimg.png&type=output&preview=webp;jpeg;70")
+            self.assertEqual(r.status_code, 200)          # 回退归档而不是 502
+            self.assertEqual(r.data, b"RIFF\x00\x00\x00\x00WEBPfake")
+            self.assertEqual(r.content_type, "image/webp")
+            cp2, _ = img_cache_get(key)
+            self.assertIsNotNone(cp2)                     # 缩略图缓存已回填
+            self.assertEqual(cp2.read_bytes(), b"RIFF\x00\x00\x00\x00WEBPfake")
+        finally:
+            client.download_image = orig
+            (st.LOCAL_DIR / "output/lostimg.png").unlink(missing_ok=True)
 
     def test_feature_flags(self):
         """ENABLE_* 作为初始默认:置 0 后对应路由 404、菜单隐藏,其余模块不受影响。"""

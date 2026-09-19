@@ -36,6 +36,8 @@
 - `comfy_client.py`：HTTP API 封装 + 常驻 WebSocket 监听线程（progress_state / execution_* 事件，兼容旧版），断线自动重连；WS 不可用时轮询 `/history` 对账兜底。
 - `workflow.py`：API 格式工作流解析（参数自动识别）与提交时值注入。
 - `batchgen.py`：批量生成（AI 细化任务清单 + 内置 anima/z-image 管线预设 + 按模型分组的生成引擎）。
+- `storage.py`：图片归档两层结构——本地 `data/images` 缓冲（快速层 + NAS 故障降级）与 NAS 整理库（canonical 正本）；NAS 写入慢/失败自动降级本地、恢复后补同步，library 确认后本地副本 7 天清理。
+- `library.py`：NAS 图片整理库（`servershare/comfyui/library/`）——按 `模型/日期_任务` 分类，单目录超 500 张自动开 `_NNN` 分片（只增不改名，索引永不失效）；收编 `output/` 根目录平铺图（手工子目录不碰、GPU 重复推送按索引去重）；索引正本在本机 `data/library.db`，快照 + md5 校验推送 NAS `index.db` 供其他设备只读浏览；`reverse()` 可把已收编图还原回 output/。
 - `db.py`：SQLite（设置 / 模板元数据 / 任务 / 图片记录 / 批量生成提示词模板），模板 JSON 存 `data/workflows/`。
 - 前端：Bulma 0.9.4 本地 vendor + hub-nav 同款皮肤（`static/css/skin.css`），原生 JS，零构建。
 
@@ -51,7 +53,7 @@
 - 所有 POST 接口有同源校验（跨站请求被 403），ComfyUI 地址只允许解析到内网的 http(s) 纯主机地址（防 SSRF），Civitai 图片代理仅限 civitai.com 域。
 - `.env` 含 AI 网关密钥，已被 `.gitignore` 排除、不入库；仓库内所有示例配置均为占位符，部署时再填真实值。
 - 跨机 GPU 监控走 SSH 时（`COMFY_SSH`）首次部署先 `ssh-keyscan` 录入主机密钥，应用不做首次自动信任。
-- 数据都在 `data/` 目录（SQLite + 缓存），建议定期备份：`python scripts/backup.py [目标目录]`。
+- 数据都在 `data/` 目录（SQLite + 缓存）。备份：每日 03:30 的 systemd timer（`deploy/comfyweb-backup.timer`）自动执行 `scripts/backup.py`——本地 `~/comfyweb-backup` 与 NAS `~/servershare/comfyui/comfyweb/` 各保留 30 份快照（含 .env、tag 字典；可再生的缩略图缓存除外）。SQLite 备份一律先在本地盘生成成品快照再字节拷贝到 NAS，不让 SQLite 直接跑在 CIFS 上（SMB 字节范围锁会卡死）。
 
 ## 开发与测试
 
