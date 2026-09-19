@@ -6,6 +6,7 @@ progress 与 executing{node:null} 完成信号),任务完成后从 /history 取�
 """
 import ipaddress
 import json
+import os
 import socket
 import threading
 import time
@@ -107,12 +108,16 @@ class ComfyClient:
             if not ip.is_private:
                 raise ComfyError(f"ComfyUI 地址必须是内网地址(解析到 {ip} 不是私有网段)")
 
+    def _verify(self):
+        """https 自签证书的 ComfyUI 可在 .env 设 COMFYUI_INSECURE=1 跳过证书校验。"""
+        return os.environ.get("COMFYUI_INSECURE") != "1"
+
     def get_json(self, path, params=None, timeout=15):
         url = self.base_url() + path
         last_exc = None
         for attempt in range(3):  # ComfyUI 重启窗口期会出现瞬时连接失败,短暂重试
             try:
-                r = requests.get(url, params=params, timeout=timeout)
+                r = requests.get(url, params=params, timeout=timeout, verify=self._verify())
                 break
             except requests.RequestException as e:
                 last_exc = e
@@ -191,7 +196,7 @@ class ComfyClient:
         """请求 /view,返回 requests 响应(流式)。"""
         url = self.view_url(filename, subfolder, img_type, preview)
         try:
-            r = requests.get(url, stream=True, timeout=30)
+            r = requests.get(url, stream=True, timeout=30, verify=self._verify())
         except requests.RequestException as e:
             raise ComfyError(f"取图失败: {e.__class__.__name__}") from e
         if r.status_code != 200:
@@ -299,7 +304,9 @@ class ComfyClient:
             ws_url = base.replace("http", "ws", 1) + f"/ws?clientId={CLIENT_ID}"
             ws = None
             try:
-                ws = websocket.create_connection(ws_url, timeout=10)
+                sslopt = {"cert_reqs": 0} if not self._verify() else None
+                ws = websocket.create_connection(
+                    ws_url, timeout=10, sslopt=sslopt if sslopt else None)
                 connected = True
                 delay = 3.0
                 self.ws_state = "已连接"

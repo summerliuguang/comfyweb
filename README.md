@@ -41,11 +41,20 @@
 - `db.py`：SQLite（设置 / 模板元数据 / 任务 / 图片记录 / 批量生成提示词模板），模板 JSON 存 `data/workflows/`。
 - 前端：Bulma 0.9.4 本地 vendor + hub-nav 同款皮肤（`static/css/skin.css`），原生 JS，零构建。
 
-## 部署（本机）
+## 部署
 
-- systemd 服务：`deploy/comfyweb.service`（模板，按实际用户/路径改过后安装；绑 `127.0.0.1:5012`）
-- nginx：`deploy/nginx-comfyweb.conf`（对外 29xxx 端口自签证书，http 301 跳 https，basic auth 凭据在服务器 `/etc/nginx/*.htpasswd`）
-- 导航页注册：按自己导航页的格式把端口加进服务列表
+**一键安装**（交互式：venv + 依赖 + .env + ComfyUI 地址 http/https + 整理库默认 `<安装目录>/library` + 可选立即启动）：
+
+```bash
+git clone <仓库> comfyweb && cd comfyweb
+bash deploy/install.sh
+```
+
+**日常启停**：`deploy/start.sh`（前台）/ `--daemon`（后台，healthz 探活）/ `--stop`。
+
+**开机自启**：`bash deploy/systemd-gen.sh` 按实际用户/路径/端口渲染 systemd 单元（含每日备份 timer），按其输出提示自行 `sudo cp` + `enable --now`；nginx 局域网反代按 `deploy/nginx-comfyweb.conf` 自行配置（29xxx 自签证书、basic auth）。
+
+**手动部署**：`python3 -m venv venv && venv/bin/pip install -r requirements.txt && cp .env.example .env`，然后 `deploy/start.sh`。
 
 ## 安全注意
 
