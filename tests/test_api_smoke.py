@@ -249,6 +249,8 @@ class ApiSmoke(unittest.TestCase):
             lib_file = Path(lib).parent / row["path"]
             self.assertTrue(lib_file.exists())                    # library 副本在
             self.assertEqual(st.find_archived("arch-test.png", "", "output"), local)
+            # 库内副本确认后,本地缓冲不计为待入库(v2 路径解析回归)
+            self.assertEqual(st.status()["pending"], 0)
             local.unlink()
             self.assertEqual(st.find_archived("arch-test.png", "", "output"), lib_file)
             # 读路径:归档命中直接回文件

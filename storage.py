@@ -201,7 +201,7 @@ def sync_pending():
         try:
             row = library.indexed(filename)
             if row:
-                dest = library.library_dir() / row["path"]
+                dest = library.nas_root() / row["path"]
                 if dest.exists() and dest.stat().st_size >= p.stat().st_size:
                     # library 副本不低于本地:超龄释放(读路径自动落到 library)
                     if now - p.stat().st_mtime > PRUNE_AFTER_DAYS * 86400:
@@ -307,7 +307,7 @@ def status():
                 continue
             row = library.indexed(p.name)
             try:
-                dest = (library.library_dir() / row["path"]) if row else None
+                dest = (library.nas_root() / row["path"]) if row else None
                 if dest is None or not dest.exists() or dest.stat().st_size < p.stat().st_size:
                     pending += 1
             except OSError:
