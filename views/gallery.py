@@ -57,14 +57,12 @@ def _short(s, limit=34):
     return s if len(s) <= limit else s[:limit - 1] + "…"
 
 
-@bp.get("/gallery")
-def page_gallery():
-    where, args, cur = _gallery_filter()
-    page = _parse_page()
+def _gallery_items(where, args, page):
+    """按页构建画廊条目(HTML 与 JSON 分页接口共用)。"""
     rows, total = library.page_query(where, args, page, PAGE_SIZE)
     pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
     page = min(page, pages)
-    if page != _parse_page():  # 超出末页时回落
+    if rows is not None and page != _parse_page():  # 超出末页时回落
         rows, total = library.page_query(where, args, page, PAGE_SIZE)
     img_ids = library.task_img_id_map([r["filename"] for r in rows])
     items = []
@@ -80,6 +78,21 @@ def page_gallery():
             "url": f"/libmedia/{r['rowid']}",
             "label": _short(label, 60),
         })
+    return items, page, pages, total
+
+
+@bp.get("/api/gallery/items")
+def api_gallery_items():
+    """画廊分页 JSON(无限滚动追加加载用)。"""
+    where, args, _cur = _gallery_filter()
+    items, page, pages, total = _gallery_items(where, args, _parse_page())
+    return {"items": items, "page": page, "pages": pages, "total": total}
+
+
+@bp.get("/gallery")
+def page_gallery():
+    where, args, cur = _gallery_filter()
+    items, page, pages, total = _gallery_items(where, args, _parse_page())
     opts = library.filter_options()
     opts = {
         "workflows": opts["workflow"],

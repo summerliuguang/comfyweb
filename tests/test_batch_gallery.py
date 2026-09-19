@@ -74,6 +74,25 @@ class BatchGalleryFilters(unittest.TestCase):
                 library._index_remove(fn)
 
 
+class GalleryPagination(unittest.TestCase):
+    def test_items_json_endpoint(self):
+        """/api/gallery/items 分页 JSON(无限滚动数据源):条目、页码、总数。"""
+        img = _seed_task("分页测试图", "分页批次", "立绘")
+        try:
+            d = client_app.get("/api/gallery/items?page=1").get_json()
+            self.assertIn("items", d)
+            self.assertGreaterEqual(d["total"], 1)
+            self.assertGreaterEqual(d["pages"], 1)
+            it = next(x for x in d["items"] if x["label"] == "分页测试图")
+            self.assertIn("/libthumb/", it["thumb"])
+            self.assertTrue(it["task_img_id"])
+        finally:
+            import library
+            db.execute("DELETE FROM images WHERE id=?", (img,))
+            db.execute("DELETE FROM tasks WHERE prompt_text='分页测试图'")
+            library._index_remove("分页测试图.png")
+
+
 class Favorites(unittest.TestCase):
     def test_fav_toggle_and_favorites_page(self):
         img = _seed_task("收藏测试图", "收藏批次", "立绘")

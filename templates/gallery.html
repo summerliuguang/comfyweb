@@ -72,10 +72,12 @@
   </div>
   {% if pages > 1 %}
   <div class="pager">
-    {% if page > 1 %}<a class="button is-small" href="/gallery?{{ qs }}{{ '&' if qs else '' }}page={{ page - 1 }}">上一页</a>{% endif %}
-    <span>第 {{ page }} / {{ pages }} 页</span>
-    {% if page < pages %}<a class="button is-small" href="/gallery?{{ qs }}{{ '&' if qs else '' }}page={{ page + 1 }}">下一页</a>{% endif %}
+    <span id="pageInfo">已加载第 {{ page }} / {{ pages }} 页 · 共 {{ total }} 张</span>
+    <input class="input is-small" id="jumpInput" type="number" min="1" max="{{ pages }}"
+           value="{{ page }}" style="width:5rem" aria-label="页码">
+    <button class="button is-small" id="btnJump" type="button">跳转</button>
   </div>
+  <div id="sentinel" style="padding:1rem 0;text-align:center;color:#8a90a0;font-size:.85rem">上拉加载更多</div>
   {% endif %}
   {% endif %}
 </div>
@@ -83,6 +85,8 @@
 {% block scripts %}
 {% if items %}
 <script>
+const FAV_ON = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" stroke="none" aria-hidden="true"><path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.6 9.7l5.8-.8z"/></svg>';
+const FAV_OFF = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.6 9.7l5.8-.8z"/></svg>';
 /* 收藏切换:事件委托(卡片是 <a>,点星标要拦住跳转) */
 document.querySelector('.masonry').addEventListener('click', async (e) => {
   const btn = e.target.closest('.fav-btn');
@@ -92,7 +96,7 @@ document.querySelector('.masonry').addEventListener('click', async (e) => {
   if (!r.ok) return;
   const d = await r.json();
   btn.classList.toggle('on', d.fav);
-  btn.innerHTML = d.fav ? "<svg viewBox=\"0 0 24 24\" width=\"14\" height=\"14\" fill=\"currentColor\" stroke=\"none\" aria-hidden=\"true\"><path d=\"M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.6 9.7l5.8-.8z\"/></svg>" : "<svg viewBox=\"0 0 24 24\" width=\"14\" height=\"14\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.6 9.7l5.8-.8z\"/></svg>";
+  btn.innerHTML = d.fav ? FAV_ON : FAV_OFF;
   btn.title = d.fav ? '取消收藏' : '收藏';
 });
 </script>
@@ -101,7 +105,7 @@ document.querySelector('.masonry').addEventListener('click', async (e) => {
    图片加载后按真实比例重排,窗口缩放自适应 */
 (function () {
   const wrap = document.querySelector('.masonry');
-  const items = Array.from(wrap.children);
+  let items = Array.from(wrap.children);
   const GAP = 10;
   let timer = null;
 
@@ -129,17 +133,106 @@ document.querySelector('.masonry').addEventListener('click', async (e) => {
     wrap.style.height = Math.max(...heights) + 'px';
   }
 
-  for (const it of items) {
-    it.querySelector('img').addEventListener('load', () => {
-      clearTimeout(timer);
-      timer = setTimeout(layout, 60);        // 批量加载完只重排一次
-    });
+  function bindLoad(els) {
+    for (const it of els) {
+      it.querySelector('img').addEventListener('load', () => {
+        clearTimeout(timer);
+        timer = setTimeout(layout, 60);      // 批量加载完只重排一次
+      });
+    }
   }
+  bindLoad(items);
   addEventListener('resize', () => {
     clearTimeout(timer);
     timer = setTimeout(layout, 80);
   });
   layout();
+  /* 无限滚动追加:新卡片入列后按既有列高规则排布 */
+  window.__masonryAdd = function (nodes) {
+    nodes.forEach(n => wrap.appendChild(n));
+    items = Array.from(wrap.children);
+    bindLoad(nodes);
+    layout();
+  };
+})();
+</script>
+<script>
+/* 无限滚动:底部哨兵进入视口即追加下一页;页码跳转则整页定位 */
+(function () {
+  const qs = '{{ qs }}';
+  let page = {{ page }}, pages = {{ pages }};
+  const TOTAL = {{ total }};
+  const sentinel = document.getElementById('sentinel');
+  const info = document.getElementById('pageInfo');
+  let loading = false;
+
+  function makeCard(it) {
+    const a = document.createElement('a');
+    a.className = 'gitem';
+    a.href = '/gallery/view/' + it.rowid + (qs ? '?' + qs : '');
+    const img = document.createElement('img');
+    img.src = it.thumb;
+    img.loading = 'lazy';
+    img.alt = '图片';
+    a.appendChild(img);
+    if (it.task_img_id) {
+      const b = document.createElement('button');
+      b.className = 'fav-btn' + (it.fav ? ' on' : '');
+      b.type = 'button';
+      b.dataset.fav = it.task_img_id;
+      b.title = it.fav ? '取消收藏' : '收藏';
+      b.innerHTML = it.fav ? FAV_ON : FAV_OFF;
+      a.appendChild(b);
+    }
+    const cap = document.createElement('div');
+    cap.className = 'gmeta';
+    cap.title = it.label;
+    cap.textContent = it.label || '(未分类)';
+    a.appendChild(cap);
+    return a;
+  }
+
+  function updateInfo() {
+    info.textContent = `已加载第 ${page} / ${pages} 页 · 共 ${TOTAL} 张`;
+  }
+
+  async function loadNext() {
+    if (loading || page >= pages) return;
+    loading = true;
+    sentinel.textContent = '加载中…';
+    try {
+      const u = new URL('/api/gallery/items', location.origin);
+      if (qs) u.search = '?' + qs;
+      u.searchParams.set('page', page + 1);
+      const r = await fetch(u);
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || r.status);
+      page = d.page;
+      window.__masonryAdd(d.items.map(makeCard));
+      updateInfo();
+    } catch (e) {
+      sentinel.textContent = '加载失败: ' + e.message;
+    }
+    sentinel.textContent = page >= pages ? '已全部加载' : '上拉加载更多';
+    loading = false;
+  }
+
+  if (sentinel) {
+    new IntersectionObserver((es) => {
+      if (es.some(e => e.isIntersecting)) loadNext();
+    }, { rootMargin: '400px' }).observe(sentinel);
+  }
+  const btnJump = document.getElementById('btnJump');
+  if (btnJump) btnJump.addEventListener('click', () => {
+    const v = parseInt(document.getElementById('jumpInput').value, 10);
+    if (!v || v < 1 || v > pages) return;
+    location.href = '/gallery?page=' + v + (qs ? '&' + qs : '');
+  });
+  const ji = document.getElementById('jumpInput');
+  if (ji) ji.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); btnJump.click(); }
+  });
+  updateInfo();
 })();
 </script>
 {% endif %}
