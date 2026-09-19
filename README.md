@@ -67,8 +67,8 @@ bash deploy/install.sh
 ## 开发与测试
 
 ```bash
-# 单元测试 + API 冒烟测试(内置 mock ComfyUI,不需要真实服务)
-shared-venv 的 python -m unittest discover -s tests
+# 日常快速验证(核心链路 6 条,约 4 秒): bash scripts/test-quick.sh
+# 全量测试(64 条,含 mock ComfyUI 端到端): python -m unittest discover -s tests
 ```
 
 ## 已知取舍
