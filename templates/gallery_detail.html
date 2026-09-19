@@ -38,7 +38,7 @@
   const qs = '{{ qs }}';
   const NEIGHBORS = {{ neighbors | tojson }};
   const GEN_ON = {{ features.gen | tojson }};
-  const BASE_POS = {{ pos }}, TOTAL = {{ total }};
+  const BASE_POS = {{ pos }}, TOTAL = {{ total }}, IDX0 = {{ idx }};
   const NEWER_RID = {{ newer_rid | tojson }}, OLDER_RID = {{ older_rid | tojson }};
   let cur = {{ idx }};
   const viewer = document.getElementById('viewer');
@@ -122,31 +122,32 @@
           `<a class="button is-link is-small" href="${it.dl}" download>下载原图</a>` +
           '</div>';
       } else {
-      const rows = [];
-      rows.push(['工作流', esc(d.workflow_name)]);
-      if (d.category) rows.push(['画面类型', esc(d.category)]);
-      if (d.batch) rows.push(['批次主题', esc(d.batch)]);
-      if (d.model) rows.push(['模型', esc(d.model)]);
-      if (d.lora) rows.push(['LoRA', esc(d.lora)]);
-      rows.push(['生成时间', esc(d.created_at)]);
-      if (d.prompt_text) rows.push(['正面提示词', esc(d.prompt_text)]);
-      const hasSeed = d.seed !== null && d.seed !== undefined;
-      if (hasSeed) rows.push(['种子', esc(d.seed)]);
-      for (const p of d.params || []) {
-        if (p.label === '随机种子' && hasSeed) continue;
-        rows.push([esc(p.label), esc(p.value)]);
+        const rows = [];
+        rows.push(['工作流', esc(d.workflow_name)]);
+        if (d.category) rows.push(['画面类型', esc(d.category)]);
+        if (d.batch) rows.push(['批次主题', esc(d.batch)]);
+        if (d.model) rows.push(['模型', esc(d.model)]);
+        if (d.lora) rows.push(['LoRA', esc(d.lora)]);
+        rows.push(['生成时间', esc(d.created_at)]);
+        if (d.prompt_text) rows.push(['正面提示词', esc(d.prompt_text)]);
+        const hasSeed = d.seed !== null && d.seed !== undefined;
+        if (hasSeed) rows.push(['种子', esc(d.seed)]);
+        for (const p of d.params || []) {
+          if (p.label === '随机种子' && hasSeed) continue;
+          rows.push([esc(p.label), esc(p.value)]);
+        }
+        const dl = it.url + '&dl=1';
+        const again = (it.w && GEN_ON) ? `<a class="button is-light is-small" href="/?template=${it.w}&task=${it.id}">再次生成</a>` : '';
+        paramsCache[it.rid] =
+          '<table class="kv">' +
+          rows.map(([k, v]) => `<tr><td>${k}</td><td class="val">${v}</td></tr>`).join('') +
+          '</table><div class="buttons" style="margin-top:.9rem">' +
+          `<a class="button is-link is-small" href="${dl}" download>下载原图</a>${again}` +
+          (it.task ? '<button class="button is-danger is-light is-small" id="btnDelete">删除记录</button>' : '') +
+          '</div>';
       }
-      const dl = it.url + '&dl=1';
-      const again = (it.w && GEN_ON) ? `<a class="button is-light is-small" href="/?template=${it.w}&task=${it.id}">再次生成</a>` : '';
-      paramsCache[it.rid] =
-        '<table class="kv">' +
-        rows.map(([k, v]) => `<tr><td>${k}</td><td class="val">${v}</td></tr>`).join('') +
-        '</table><div class="buttons" style="margin-top:.9rem">' +
-        `<a class="button is-link is-small" href="${dl}" download>下载原图</a>${again}` +
-        (it.task ? '<button class="button is-danger is-light is-small" id="btnDelete">删除记录</button>' : '') +
-        '</div>';
     }
-    sheetBody.innerHTML = paramsCache[it.id];
+    sheetBody.innerHTML = paramsCache[it.rid];
   }
 
   /* sheet 内按钮用事件委托(内容随图片切换重建) */
@@ -205,7 +206,7 @@
     img.src = it.url;
     img.onload = () => { switching = false; };
     setTimeout(() => { switching = false; }, 900);  // 加载卡住时兜底
-    posEl.textContent = `${BASE_POS - idx + cur}/${TOTAL}`;
+    posEl.textContent = `${BASE_POS - IDX0 + cur}/${TOTAL}`;
     document.getElementById('sPrompt').textContent = it.prompt || '(无提示词)';
     document.getElementById('sMeta').textContent =
       [it.wf, it.m, it.ts].filter(Boolean).join(' · ');
