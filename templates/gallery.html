@@ -60,7 +60,7 @@
   {% else %}
   <div class="masonry">
     {% for it in items %}
-    <a class="gitem" {% if it.task_img_id %}href="/gallery/image/{{ it.task_img_id }}{% if qs %}?{{ qs }}{% endif %}"{% else %}href="{{ it.url }}" data-lib="1"{% endif %}>
+    <a class="gitem" href="/gallery/view/{{ it.rowid }}{% if qs %}?{{ qs }}{% endif %}">
       <img src="{{ it.thumb }}" loading="lazy" alt="图片">
       {% if it.task_img_id %}
       <button class="fav-btn{{ ' on' if it.fav }}" type="button" data-fav="{{ it.task_img_id }}"
@@ -95,24 +95,7 @@ document.querySelector('.masonry').addEventListener('click', async (e) => {
   btn.innerHTML = d.fav ? "<svg viewBox=\"0 0 24 24\" width=\"14\" height=\"14\" fill=\"currentColor\" stroke=\"none\" aria-hidden=\"true\"><path d=\"M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.6 9.7l5.8-.8z\"/></svg>" : "<svg viewBox=\"0 0 24 24\" width=\"14\" height=\"14\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.6 9.7l5.8-.8z\"/></svg>";
   btn.title = d.fav ? '取消收藏' : '收藏';
 });
-/* 非任务图(手工/未分类):页内灯箱看原图,点图或背景关闭 */
-document.querySelector('.masonry').addEventListener('click', (e) => {
-  const a = e.target.closest('a[data-lib]');
-  if (!a) return;
-  e.preventDefault();
-  let lb = document.getElementById('libLb');
-  if (!lb) {
-    lb = document.createElement('div');
-    lb.id = 'libLb';
-    lb.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.88);z-index:99;display:flex;align-items:center;justify-content:center;cursor:zoom-out';
-    lb.innerHTML = '<img style="max-width:96%;max-height:94%;border-radius:6px" alt="">';
-    document.body.appendChild(lb);
-    lb.addEventListener('click', () => { lb.style.display = 'none'; });
-  }
-  lb.style.display = 'flex';
-  lb.querySelector('img').src = a.getAttribute('href');
-});
-</script>
+
 <script>
 /* 瀑布流:按 DOM 顺序(新→旧)放进最矮的一列 → 视觉上从左往右阅读;
    图片加载后按真实比例重排,窗口缩放自适应 */

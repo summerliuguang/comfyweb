@@ -4,8 +4,8 @@
 <div class="viewer" id="viewer">
   <div class="v-top">
     <a class="vchip" href="/gallery{% if qs %}?{{ qs }}{% endif %}">‹ 画廊</a>
-    <span class="vchip v-count" id="posEl">{{ idx + 1 }}/{{ neighbors|length }}</span>
-    <button class="vchip v-btn{{ ' on' if item.fav }}" id="btnFav" type="button"
+    <span class="vchip v-count" id="posEl">{{ pos }}/{{ total }}</span>
+    <button class="vchip v-btn{{ ' on' if item.fav }}" id="btnFav" type="button"{% if not item.task %} hidden{% endif %}
       title="{{ '取消收藏' if item.fav else '收藏' }}">{% if item.fav %}<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" stroke="none" aria-hidden="true"><path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.6 9.7l5.8-.8z"/></svg>{% else %}<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.6 9.7l5.8-.8z"/></svg>{% endif %}</button>
     <button class="vchip v-btn" id="btnBg" type="button" title="切换背景色">◐</button>
   </div>
@@ -38,6 +38,8 @@
   const qs = '{{ qs }}';
   const NEIGHBORS = {{ neighbors | tojson }};
   const GEN_ON = {{ features.gen | tojson }};
+  const BASE_POS = {{ pos }}, TOTAL = {{ total }};
+  const NEWER_RID = {{ newer_rid | tojson }}, OLDER_RID = {{ older_rid | tojson }};
   let cur = {{ idx }};
   const viewer = document.getElementById('viewer');
   const img = document.getElementById('detailImg');
@@ -95,17 +97,31 @@
 
   async function renderSheetBody(it) {
     if (sheetBody.hidden) return;
-    if (!paramsCache[it.id]) {
+    if (!paramsCache[it.rid]) {
       sheetBody.innerHTML = '<p class="hint" style="padding:.4rem 0">加载参数…</p>';
       let d;
       try {
-        const r = await fetch(`/api/gallery/image/${it.id}/params`);
+        const r = await fetch(it.task ? `/api/gallery/image/${it.id}/params`
+                                      : `/api/library/image/${it.rid}/info`);
         d = await r.json();
         if (!r.ok) throw new Error(d.error || r.status);
       } catch (e) {
         sheetBody.innerHTML = `<p class="task-err">参数加载失败: ${esc(e.message)}</p>`;
         return;
       }
+      if (!it.task) {
+        const kb = d.size ? (d.size / 1024).toFixed(0) + ' KB' : '--';
+        const rows2 = [['文件名', esc(d.filename)], ['模型', esc(d.model || '--')],
+          ['画面类型', esc(d.category || '--')], ['批次主题', esc(d.batch || '--')],
+          ['工作流', esc(d.workflow || '--')], ['标签', esc((d.tags || []).join(', ') || '--')],
+          ['大小', kb], ['时间', esc(d.created_at)]];
+        paramsCache[it.rid] =
+          '<table class="kv">' +
+          rows2.map(([k, v]) => `<tr><td>${k}</td><td class="val">${v}</td></tr>`).join('') +
+          '</table><div class="buttons" style="margin-top:.9rem">' +
+          `<a class="button is-link is-small" href="${it.dl}" download>下载原图</a>` +
+          '</div>';
+      } else {
       const rows = [];
       rows.push(['工作流', esc(d.workflow_name)]);
       if (d.category) rows.push(['画面类型', esc(d.category)]);
@@ -122,12 +138,12 @@
       }
       const dl = it.url + '&dl=1';
       const again = (it.w && GEN_ON) ? `<a class="button is-light is-small" href="/?template=${it.w}&task=${it.id}">再次生成</a>` : '';
-      paramsCache[it.id] =
+      paramsCache[it.rid] =
         '<table class="kv">' +
         rows.map(([k, v]) => `<tr><td>${k}</td><td class="val">${v}</td></tr>`).join('') +
         '</table><div class="buttons" style="margin-top:.9rem">' +
         `<a class="button is-link is-small" href="${dl}" download>下载原图</a>${again}` +
-        '<button class="button is-danger is-light is-small" id="btnDelete">删除记录</button>' +
+        (it.task ? '<button class="button is-danger is-light is-small" id="btnDelete">删除记录</button>' : '') +
         '</div>';
     }
     sheetBody.innerHTML = paramsCache[it.id];
@@ -136,6 +152,8 @@
   /* sheet 内按钮用事件委托(内容随图片切换重建) */
   sheetBody.addEventListener('click', async (e) => {
     if (e.target.id !== 'btnDelete') return;
+    const curIt = NEIGHBORS[cur];
+    if (!curIt || !curIt.task) return;
     if (!confirm('从画廊删除这条图片记录?')) return;
     const r = await fetch(`/api/gallery/image/${NEIGHBORS[cur].id}/delete`, { method: 'POST' });
     if (r.ok) {
@@ -154,13 +172,15 @@
   function syncFav() {
     const it = NEIGHBORS[cur];
     if (!it) return;
+    btnFav.hidden = !it.task;
+    if (!it.task) return;
     btnFav.innerHTML = it.f ? "<svg viewBox=\"0 0 24 24\" width=\"14\" height=\"14\" fill=\"currentColor\" stroke=\"none\" aria-hidden=\"true\"><path d=\"M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.6 9.7l5.8-.8z\"/></svg>" : "<svg viewBox=\"0 0 24 24\" width=\"14\" height=\"14\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.6 9.7l5.8-.8z\"/></svg>";
     btnFav.title = it.f ? '取消收藏' : '收藏';
     btnFav.classList.toggle('on', !!it.f);
   }
   btnFav.addEventListener('click', async () => {
     const it = NEIGHBORS[cur];
-    if (!it) return;
+    if (!it || !it.task) return;
     const r = await fetch(`/api/gallery/image/${it.id}/fav`, { method: 'POST' });
     if (!r.ok) return;
     const d = await r.json();
@@ -185,27 +205,33 @@
     img.src = it.url;
     img.onload = () => { switching = false; };
     setTimeout(() => { switching = false; }, 900);  // 加载卡住时兜底
-    posEl.textContent = `${cur + 1}/${NEIGHBORS.length}`;
+    posEl.textContent = `${BASE_POS - idx + cur}/${TOTAL}`;
     document.getElementById('sPrompt').textContent = it.prompt || '(无提示词)';
     document.getElementById('sMeta').textContent =
       [it.wf, it.m, it.ts].filter(Boolean).join(' · ');
     syncArrows();
     syncFav();
-    history.replaceState(null, '', `/gallery/image/${it.id}` + (qs ? '?' + qs : ''));
+    history.replaceState(null, '', `/gallery/view/${it.rid}` + (qs ? '?' + qs : ''));
     renderSheetBody(it);
     preload();
   }
 
   function syncArrows() {
-    btnPrev.hidden = cur <= 0;
-    btnNext.hidden = cur >= NEIGHBORS.length - 1;
+    btnPrev.hidden = cur <= 0 && !NEWER_RID;
+    btnNext.hidden = cur >= NEIGHBORS.length - 1 && !OLDER_RID;
   }
 
   function step(d) {
     if (scale > 1.02) { resetT(); return; }   // 放大状态先恢复原大,再操作
     const target = cur + d;
-    if (target < 0) { toast('已经是第一张'); return; }
-    if (target > NEIGHBORS.length - 1) { toast('已经是最后一张'); return; }
+    if (target < 0) {
+      if (NEWER_RID) { location.href = `/gallery/view/${NEWER_RID}` + (qs ? '?' + qs : ''); return; }
+      toast('已经是第一张'); return;
+    }
+    if (target > NEIGHBORS.length - 1) {
+      if (OLDER_RID) { location.href = `/gallery/view/${OLDER_RID}` + (qs ? '?' + qs : ''); return; }
+      toast('已经是最后一张'); return;
+    }
     goTo(target, true);
   }
 

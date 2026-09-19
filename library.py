@@ -181,8 +181,46 @@ def _lib_connect():
 def indexed(filename):
     with _lock:
         row = _lib_connect().execute(
-            "SELECT * FROM files WHERE filename=? LIMIT 1", (filename,)).fetchone()
+            "SELECT rowid, * FROM files WHERE filename=? LIMIT 1", (filename,)).fetchone()
     return dict(row) if row else None
+
+
+def view_neighbors(rowid, where="", args=(), window=40):
+    """详情页定位:当前行 + 全库(或筛选集)内位置 + 邻图窗口 + 跨窗口接续 ID。
+
+    排序与画廊网格一致(created_at DESC, rowid DESC);pos 从最新数起。
+    邻图只取当前 ±window,窗口外给出 newer_rid/older_rid 供前端跳转续览。
+    """
+    conn = _lib_connect()
+    cur = conn.execute("SELECT rowid, * FROM files WHERE rowid=?", (rowid,)).fetchone()
+    if not cur:
+        conn.close()
+        return None
+    key = "(created_at, rowid)"
+
+    def wcond(op):
+        if where:
+            return f"WHERE {where} AND {key} {op} (?, ?)", (*args, cur["created_at"], rowid)
+        return f"WHERE {key} {op} (?, ?)", (cur["created_at"], rowid)
+
+    w_total, a_total = (f"WHERE {where}", args) if where else ("", ())
+    total = conn.execute(f"SELECT COUNT(*) FROM files {w_total}", a_total).fetchone()[0]
+    w_gt, a_gt = wcond(">")
+    pos = conn.execute(f"SELECT COUNT(*) FROM files {w_gt}", a_gt).fetchone()[0] + 1
+    w_le, a_le = wcond("<=")   # 当前及更新(排序靠前)
+    w_ge, a_ge = wcond(">=")   # 当前及更旧(排序靠后)
+    newer = conn.execute(
+        f"SELECT rowid, * FROM files {w_le} ORDER BY created_at DESC, rowid DESC LIMIT ?",
+        (*a_le, window + 1)).fetchall()
+    older = conn.execute(
+        f"SELECT rowid, * FROM files {w_ge} ORDER BY created_at ASC, rowid ASC LIMIT ?",
+        (*a_ge, window + 1)).fetchall()
+    conn.close()
+    newer_rid = newer[-1]["rowid"] if len(newer) > window else None
+    older_rid = older[-1]["rowid"] if len(older) > window else None
+    neighbors = [dict(r) for r in list(newer[:window]) + list(reversed(older[:window]))]
+    return {"row": dict(cur), "pos": pos, "total": total, "neighbors": neighbors,
+            "newer_rid": newer_rid, "older_rid": older_rid}
 
 
 def get(rowid):

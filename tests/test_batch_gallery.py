@@ -92,7 +92,7 @@ class Favorites(unittest.TestCase):
             self.assertIn("收藏测试图", fav_page)
             self.assertIn('class="fav-btn on"', fav_page)
             # 详情页星标点亮
-            detail = client_app.get(f"/gallery/image/{img}").get_data(as_text=True)
+            detail = client_app.get(f"/gallery/image/{img}", follow_redirects=True).get_data(as_text=True)
             self.assertIn('id="btnFav"', detail)
             # 星标为内联 SVG(规范禁 emoji 字符),点亮态是填充色版本
             self.assertIn('id="btnFav"', detail)

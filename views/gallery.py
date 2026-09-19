@@ -115,91 +115,113 @@ def api_gallery_image_params(img_id):
             "params": json.loads(row["params_json"] or "[]")}
 
 
-@bp.get("/gallery/image/<int:img_id>")
-def page_gallery_detail(img_id):
-    """任务图详情页(仅 images 表记录;筛选在 URL 中保留以支撑前后翻页)。"""
-    import json as _json
+@bp.get("/gallery/view/<int:rowid>")
+def page_gallery_view(rowid):
+    """详情页(全库索引定位):位置/翻页/邻图与画廊网格同一数据源。
+
+    上滑详情面板:有任务记录的图显示完整生成参数(收藏/删除/再次生成),
+    其余显示库内信息(模型/标签/大小)。
+    """
+    where, args, _cur = _gallery_filter()
+    ctx = library.view_neighbors(rowid, where, args)
+    if not ctx:
+        return "图片不存在(可能已被删除)", 404
+
     from views.helpers import image_url
 
-    q = request.args.get("q", "").strip()
-    conds, args = [], []
-    if q:
-        conds.append("(t.prompt_text LIKE ? OR t.params_json LIKE ?)")
-        args += [f"%{q}%", f"%{q}%"]
-    for key, col in (("wf", "t.workflow_name"), ("model", "t.model"), ("lora", "t.lora"),
-                     ("cat", "t.category"), ("batch", "t.batch")):
-        val = request.args.get(key, "").strip()
-        if val:
-            conds.append(f"{col} LIKE ?")
-            args.append(f"%{val}%")
-    rng = request.args.get("range", "all")
-    if rng in ("today", "7d", "30d"):
-        span = {"today": "-1 day", "7d": "-7 days", "30d": "-30 days"}[rng]
-        conds.append("t.created_at >= datetime('now','localtime',?)")
-        args.append(span)
-    where = ("WHERE " + " AND ".join(conds)) if conds else ""
+    # 任务记录增强(按文件名关联):详情面板参数、收藏角标、再次生成
+    tmap = {}
+    names = [r["filename"] for r in ctx["neighbors"]] + [ctx["row"]["filename"]]
+    img_ids = library.task_img_id_map(names)
+    real_ids = [v["img_id"] for v in img_ids.values() if v["img_id"]]
+    if real_ids:
+        marks = ",".join("?" * len(real_ids))
+        for t in db.query(
+                f"SELECT i.id, i.filename, i.subfolder, i.type, i.fav, t.workflow_id, "
+                f"t.workflow_name, t.prompt_text, t.model, t.seed, t.created_at, t.params_json "
+                f"FROM images i JOIN tasks t ON t.id=i.task_id WHERE i.id IN ({marks})",
+                real_ids):
+            tmap[t["filename"]] = dict(t)
 
-    row = db.query_one(
-        "SELECT i.*, t.workflow_id, t.workflow_name, t.prompt_text, t.seed, t.params_json, "
-        "t.model, t.lora, t.status, t.category, t.batch, "
-        "t.created_at AS task_created, t.count "
-        "FROM images i JOIN tasks t ON t.id=i.task_id WHERE i.id=?", (img_id,))
-    if not row:
-        return "图片不存在(可能已被删除,或 ComfyUI 输出文件已清理)", 404
-    prev_row = next_row = None
-    if conds:
-        prev_row = db.query_one(
-            f"SELECT i.id FROM images i JOIN tasks t ON t.id=i.task_id {where} "
-            "AND i.id < ? ORDER BY i.id DESC LIMIT 1", args + [img_id])
-        next_row = db.query_one(
-            f"SELECT i.id FROM images i JOIN tasks t ON t.id=i.task_id {where} "
-            "AND i.id > ? ORDER BY i.id LIMIT 1", args + [img_id])
-    else:
-        prev_row = db.query_one(
-            "SELECT i.id FROM images i JOIN tasks t ON t.id=i.task_id "
-            "WHERE i.id < ? ORDER BY i.id DESC LIMIT 1", (img_id,))
-        next_row = db.query_one(
-            "SELECT i.id FROM images i JOIN tasks t ON t.id=i.task_id "
-            "WHERE i.id > ? ORDER BY i.id LIMIT 1", (img_id,))
-    item = dict(row)
-    item["params"] = _json.loads(row["params_json"] or "[]")
-    item["model_short"] = re.sub(r"^.*[\\/]", "", row["model"] or "") if row["model"] else ""
-    item["url"] = image_url(row["filename"], row["subfolder"], row["type"])
-    item["download"] = image_url(row["filename"], row["subfolder"], row["type"], dl=True)
-    item["prev_id"] = prev_row["id"] if prev_row else None
-    item["next_id"] = next_row["id"] if next_row else None
-    base = "FROM images i JOIN tasks t ON t.id=i.task_id " + where
-    pos_where = " AND i.id < ?" if conds else " WHERE i.id < ?"
-    item["pos"] = db.query_one(
-        f"SELECT COUNT(*) AS n {base}{pos_where}", args + [img_id])["n"] + 1
-    item["total"] = db.query_one(f"SELECT COUNT(*) AS n {base}", args)["n"]
-    item["total"] = max(item["total"], 1)
-
-    # 邻图数据(任务记录集合内,供 AJAX 切换)
-    rows = db.query(
-        f"SELECT i.id, i.filename, i.subfolder, i.type, i.fav, t.workflow_id, t.workflow_name, "
-        f"t.model, t.prompt_text, t.created_at AS task_created "
-        f"FROM images i JOIN tasks t ON t.id=i.task_id {where} "
-        f"ORDER BY i.id DESC LIMIT 400", args)
-    neighbors, cur_idx = [], -1
-    for r in rows:
-        if r["id"] == img_id:
-            cur_idx = len(neighbors)
-        prompt = (r["prompt_text"] or "").strip()
+    neighbors = []
+    for r in ctx["neighbors"]:
+        t = tmap.get(r["filename"])
+        rid = r["rowid"]
+        if t:
+            url = image_url(r["filename"], t["subfolder"], t["type"])
+            dl = image_url(r["filename"], t["subfolder"], t["type"], dl=True)
+        else:
+            url, dl = f"/libmedia/{rid}", f"/libmedia/{rid}?dl=1"
         neighbors.append({
-            "id": r["id"],
-            "w": r["workflow_id"],
-            "url": image_url(r["filename"], r["subfolder"], r["type"]),
-            "thumb": image_url(r["filename"], r["subfolder"], r["type"], preview="webp;jpeg;70"),
-            "prompt": prompt[:120],
-            "wf": r["workflow_name"],
-            "m": re.sub(r"^.*[\\/]", "", r["model"] or ""),
-            "ts": r["task_created"],
-            "f": bool(r["fav"]),
+            "rid": rid, "id": (t or {}).get("id"), "task": bool(t),
+            "w": (t or {}).get("workflow_id"),
+            "url": url, "dl": dl, "thumb": f"/libthumb/{rid}",
+            "prompt": (t or {}).get("prompt_text") or f"未分类 · {r['filename']}",
+            "wf": (t or {}).get("workflow_name") or "",
+            "m": _short(r["model"]),
+            "ts": (t or {}).get("created_at") or r["created_at"],
+            "f": bool((t or {}).get("fav")),
         })
+
+    cur_row = ctx["row"]
+    t = tmap.get(cur_row["filename"])
+    if t:
+        item = {
+            "task": True, "img_id": t["id"], "fav": bool(t["fav"]),
+            "prompt_text": t["prompt_text"],
+            "workflow_name": t["workflow_name"],
+            "model_short": _short(t["model"]),
+            "task_created": t["created_at"],
+            "seed": t["seed"],
+            "params": json.loads(t["params_json"] or "[]"),
+            "url": neighbors[[n["rid"] for n in neighbors].index(rowid)]["url"],
+            "download": neighbors[[n["rid"] for n in neighbors].index(rowid)]["dl"],
+        }
+    else:
+        item = {
+            "task": False, "img_id": None, "fav": False,
+            "prompt_text": f"未分类 · {cur_row['filename']}",
+            "workflow_name": cur_row["workflow"] or cur_row["batch"] or "",
+            "model_short": _short(cur_row["model"]),
+            "task_created": cur_row["created_at"],
+            "seed": cur_row["seed"],
+            "params": [],
+            "url": f"/libmedia/{rowid}",
+            "download": f"/libmedia/{rowid}?dl=1",
+        }
+    idx = next((i for i, n in enumerate(neighbors) if n["rid"] == rowid), 0)
     qs = urlencode({k: v for k, v in request.args.items() if v.strip()})
     return render_template("gallery_detail.html", item=item, qs=qs,
-                           neighbors=neighbors, idx=cur_idx, active="gallery")
+                           neighbors=neighbors, idx=idx,
+                           pos=ctx["pos"], total=ctx["total"],
+                           newer_rid=ctx["newer_rid"], older_rid=ctx["older_rid"],
+                           active="gallery")
+
+
+@bp.get("/api/library/image/<int:rowid>/info")
+def api_library_image_info(rowid):
+    """非任务图的详情面板数据(库内信息)。"""
+    r = library.get(rowid)
+    if not r:
+        return jsonify({"error": "图片不存在"}), 404
+    return {"filename": r["filename"], "model": r["model"], "category": r["category"],
+            "batch": r["batch"], "workflow": r["workflow"], "size": r["size"],
+            "created_at": r["created_at"],
+            "tags": json.loads(r["tags"] or "[]")}
+
+
+@bp.get("/gallery/image/<int:img_id>")
+def page_gallery_detail(img_id):
+    """旧详情链接兼容:定位同名整理库行后跳转到全库详情。"""
+    row = db.query_one("SELECT filename FROM images WHERE id=?", (img_id,))
+    if not row:
+        return "图片不存在(可能已被删除,或 ComfyUI 输出文件已清理)", 404
+    lib = library.indexed(row["filename"])
+    if not lib:
+        return "图片未入库(整理库索引缺失)", 404
+    qs = urlencode({k: v for k, v in request.args.items() if v.strip()})
+    from flask import redirect
+    return redirect(f"/gallery/view/{lib['rowid']}" + (f"?{qs}" if qs else ""), 302)
 
 
 @bp.post("/api/gallery/image/<int:img_id>/delete")
