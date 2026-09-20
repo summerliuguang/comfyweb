@@ -138,6 +138,19 @@ def api_local_meta_nsfw():
     else:
         db.execute("INSERT INTO model_meta(folder, filename, nsfw) VALUES(?,?,?)",
                    (folder, filename, nsfw))
+    if nsfw:
+        # 连带历史图片:用此模型/LoRA 生成过的未标私密图,后台批量移入 nsfw/ 区
+        import threading
+
+        def _migrate():
+            import library
+            if folder == "loras":
+                cands = library.private_candidates_by_asset(lora=filename)
+            else:
+                cands = library.private_candidates_by_asset(model=filename)
+            library.migrate_to_private(cands)
+
+        threading.Thread(target=_migrate, daemon=True).start()
     return {"ok": True, "nsfw": bool(nsfw)}
 
 

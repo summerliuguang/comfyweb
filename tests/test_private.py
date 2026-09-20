@@ -142,6 +142,43 @@ class TestNsfwFiltering(unittest.TestCase):
                 conn.commit()
             db.set_setting("private_enabled", "0")
 
+    def test_workflow_mark_migrates_history(self):
+        """标工作流私密:其历史图片自动移入 nsfw/,别的工作流图片不受影响。"""
+        import library
+        wf_a = db.execute(
+            "INSERT INTO workflows(name, enabled, template_json) VALUES('wf迁移A', 1, '{}')").lastrowid
+        wf_b = db.execute(
+            "INSERT INTO workflows(name, enabled, template_json) VALUES('wf迁移B', 1, '{}')").lastrowid
+        fns = []
+        for fn in ("wfmig_a1_.png", "wfmig_a2_.png", "wfmig_b1_.png"):
+            _place(fn)
+            fns.append(fn)
+            owner = wf_a if "a" in fn else wf_b
+            tid = db.execute(
+                "INSERT INTO tasks(workflow_id, workflow_name, status) VALUES(?, 't', 'done')",
+                (owner,)).lastrowid
+            db.execute("INSERT INTO images(task_id, filename, subfolder, type) VALUES(?,?, '', 'output')",
+                       (tid, fn))
+        cands = library.private_candidates_by_workflow(wf_a)
+        self.assertEqual(sorted(cands),
+                         sorted([library.indexed(fns[0])["rowid"],
+                                 library.indexed(fns[1])["rowid"]]))
+        library.migrate_to_private(cands)
+        self.assertTrue(library.indexed(fns[0])["path"].startswith("library/nsfw/"))
+        self.assertTrue(library.indexed(fns[1])["path"].startswith("library/nsfw/"))
+        self.assertFalse(library.indexed(fns[2])["path"].startswith("library/nsfw/"))
+        # 清理:files 在 library.db;images/tasks/workflows 在 comfyweb.db
+        with library._lock:
+            conn = library._lib_connect()
+            for fn in fns:
+                conn.execute("DELETE FROM files WHERE filename=?", (fn,))
+            conn.commit()
+        for wid in (wf_a, wf_b):
+            for t in db.query("SELECT id FROM tasks WHERE workflow_id=?", (wid,)):
+                db.execute("DELETE FROM images WHERE task_id=?", (t["id"],))
+            db.execute("DELETE FROM tasks WHERE workflow_id=?", (wid,))
+            db.execute("DELETE FROM workflows WHERE id=?", (wid,))
+
     def test_model_meta_nsfw_endpoint(self):
         r = client_app.post("/api/local/meta-nsfw",
                             json={"folder": "checkpoints", "filename": "x.safetensors",

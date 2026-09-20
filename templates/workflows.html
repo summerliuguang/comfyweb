@@ -272,6 +272,8 @@
   /* 收藏/取消收藏:更新按钮态后刷新页面,收藏组与计数随之同步 */
   document.querySelectorAll('.w-nsfw').forEach(btn => {
     btn.addEventListener('click', async () => {
+      if (btn.dataset.nsfw !== '1' &&
+          !confirm('标记为私密后,该工作流将从列表与生成页隐藏(私密模式开启才可见),\n其历史图片也会自动移入私密归档区。继续?')) return;
       btn.classList.add('is-loading');
       btn.disabled = true;
       const r = await fetch('/api/workflows/' + btn.dataset.id, {

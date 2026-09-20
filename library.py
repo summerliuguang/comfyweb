@@ -550,6 +550,56 @@ def delete_image(rowid):
     return True, ""
 
 
+def private_candidates_by_workflow(workflow_id):
+    """工作流的历史图片中尚未标私密的 rowid 列表(标私密时自动联动迁移)。
+    images/tasks 在 comfyweb.db、files 在 library.db,两步查询不可跨库 JOIN。"""
+    names = [r["filename"] for r in db.query(
+        "SELECT DISTINCT i.filename FROM images i JOIN tasks t ON t.id=i.task_id "
+        "WHERE t.workflow_id=? AND i.type='output'", (workflow_id,))]
+    if not names:
+        return []
+    marks = ",".join("?" * len(names))
+    with _lock:
+        conn = _lib_connect()
+        rows = conn.execute(
+            f"SELECT rowid FROM files WHERE nsfw=0 AND filename IN ({marks})",
+            names).fetchall()
+    return [r[0] for r in rows]
+
+
+def private_candidates_by_asset(model=None, lora=None):
+    """模型/LoRA 关联(生成时用过)的未标私密图片 rowid 列表。
+    files.model/lora 存的是生成时的模型文件名,取 basename 双重匹配覆盖子目录前缀。"""
+    base = (model or lora or "")
+    base = base.rsplit("/", 1)[-1]
+    conds, args = ["nsfw=0"], []
+    if model:
+        conds.append("(model=? OR model=? OR model LIKE '%'||?)")
+        args += [model, base, base]
+    if lora:
+        conds.append("(lora=? OR lora=? OR lora LIKE '%'||?)")
+        args += [lora, base, base]
+    with _lock:
+        conn = _lib_connect()
+        rows = conn.execute(
+            f"SELECT rowid FROM files WHERE {' AND '.join(conds)}", args).fetchall()
+    return [r[0] for r in rows]
+
+
+def migrate_to_private(rowids):
+    """批量移入私密区(后台线程调用;NAS 内 rename 毫秒级)。返回成功数。"""
+    done = 0
+    for rid in rowids:
+        ok, _err = mark_private(rid, True)
+        if ok:
+            done += 1
+        else:
+            time.sleep(0.2)   # 失败(多为 NAS 抖动)稍缓再继续下一张
+    if done:
+        log.info("私密化迁移: %d 张图片移入 nsfw/ 区", done)
+    return done
+
+
 def mark_private(rowid, nsfw):
     """单张图片私密化/取消:文件与缩略图在 nsfw/ 子树与普通树之间移动,索引同步。
     返回 (ok, error)。取消时按 classify 重算普通区位置(未分类归未分类)。"""

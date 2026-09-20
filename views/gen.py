@@ -422,6 +422,15 @@ def api_workflow_update(wid):
     if "nsfw" in data:
         db.execute("UPDATE workflows SET nsfw=? WHERE id=?",
                    (1 if data.get("nsfw") else 0, int(wid)))
+        if data.get("nsfw"):
+            # 标私密即连带历史图片:后台批量移入 nsfw/ 区(取消私密不自动回迁,防误暴露手动标记的图)
+            import threading
+
+            def _migrate(wid_=wid):
+                import library
+                library.migrate_to_private(library.private_candidates_by_workflow(wid_))
+
+            threading.Thread(target=_migrate, daemon=True).start()
     for k in ("scene", "base_model", "purpose"):  # 列名为字面量白名单,无注入面
         if k in data:
             db.execute(f"UPDATE workflows SET {k}=? WHERE id=?",

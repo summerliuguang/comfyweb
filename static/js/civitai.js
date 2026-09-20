@@ -93,6 +93,8 @@
         nb.className = 'button is-small' + (f.nsfw ? ' is-danger' : ' is-light');
         nb.textContent = f.nsfw ? '私密' : '设私密';
         nb.addEventListener('click', async () => {
+          if (!f.nsfw &&
+              !confirm('标记为私密后,该模型在列表中隐藏(私密模式开启才可见),\n用它生成过的图片也会自动移入私密归档区。继续?')) return;
           nb.classList.add('is-loading');
           nb.disabled = true;
           try {
