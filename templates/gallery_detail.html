@@ -249,9 +249,41 @@
     btnNext.hidden = cur >= NEIGHBORS.length - 1 && !OLDER_RID;
   }
 
+  /* 跨窗无缝续览:接近窗口边缘时后台拉下一批原地拼接——
+     整页跳转会清掉已预载的邻图缓存,是"滑 40 张后变慢"的根源。
+     续载没赶上(网络慢)时仍回退整页跳转,行为不劣于从前 */
+  let fetchingOlder = false, fetchingNewer = false;
+  async function extendWindow(dir) {
+    const param = dir === "older" ? "after" : "before";
+    const edge = dir === "older" ? NEIGHBORS[NEIGHBORS.length - 1].rid : NEIGHBORS[0].rid;
+    try {
+      const r = await fetch(`/api/gallery/neighbors?${param}=${edge}` + (qs ? `&${qs}` : ""));
+      if (!r.ok) return;
+      const d = await r.json();
+      if (!d.items || !d.items.length) return;
+      if (dir === "older") {
+        NEIGHBORS.push(...d.items);
+        OLDER_RID = d.next_rid;
+      } else {
+        NEIGHBORS.unshift(...d.items);
+        cur += d.items.length;
+        IDX0 += d.items.length;   // posEl 公式 BASE_POS - IDX0 + cur 保持正确
+        NEWER_RID = d.next_rid;
+      }
+    } catch (e) { /* 失败留给整页跳转兜底 */ }
+  }
+
   function step(d) {
     if (scale > 1.02) { resetT(); return; }   // 放大状态先恢复原大,再操作
     const target = cur + d;
+    if (target >= NEIGHBORS.length - 3 && OLDER_RID && !fetchingOlder) {
+      fetchingOlder = true;
+      extendWindow("older").finally(() => { fetchingOlder = false; });
+    }
+    if (target <= 2 && NEWER_RID && !fetchingNewer) {
+      fetchingNewer = true;
+      extendWindow("newer").finally(() => { fetchingNewer = false; });
+    }
     if (target < 0) {
       if (NEWER_RID) { location.href = `/gallery/view/${NEWER_RID}` + (qs ? '?' + qs : ''); return; }
       toast('已经是第一张'); return;

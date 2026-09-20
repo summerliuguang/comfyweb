@@ -130,6 +130,70 @@ def api_gallery_image_params(img_id):
             "params": json.loads(row["params_json"] or "[]")}
 
 
+def _build_neighbor_items(rows, extra_for_tmap=()):
+    """索引行 → 详情页邻图条目(任务关联/URL/提示词)。页面与续览 API 共用。
+    extra_for_tmap:只参与任务记录映射、不产出条目的行(如当前图自身)。
+    返回 (条目列表, 按文件名的任务记录映射)。"""
+    from views.helpers import image_url
+
+    img_ids = library.task_img_id_map(
+        [r["filename"] for r in list(rows) + list(extra_for_tmap)])
+    real_ids = [v["img_id"] for v in img_ids.values() if v["img_id"]]
+    tmap = {}
+    if real_ids:
+        marks = ",".join("?" * len(real_ids))
+        for t in db.query(
+                f"SELECT i.id, i.filename, i.subfolder, i.type, i.fav, t.workflow_id, "
+                f"t.workflow_name, t.prompt_text, t.model, t.seed, t.created_at, t.params_json "
+                f"FROM images i JOIN tasks t ON t.id=i.task_id WHERE i.id IN ({marks})",
+                real_ids):
+            tmap[t["filename"]] = dict(t)
+    items = []
+    for r in rows:
+        t = tmap.get(r["filename"])
+        rid = r["rowid"]
+        if t:
+            url = image_url(r["filename"], t["subfolder"], t["type"])
+            dl = image_url(r["filename"], t["subfolder"], t["type"], dl=True)
+        else:
+            url, dl = f"/libmedia/{rid}", f"/libmedia/{rid}?dl=1"
+        items.append({
+            "rid": rid, "id": (t or {}).get("id"), "task": bool(t),
+            "w": (t or {}).get("workflow_id"),
+            "url": url, "dl": dl, "thumb": f"/libthumb/{rid}",
+            "prompt": (t or {}).get("prompt_text") or f"未分类 · {r['filename']}",
+            "wf": (t or {}).get("workflow_name") or "",
+            "m": _short(r["model"]),
+            "ts": (t or {}).get("created_at") or r["created_at"],
+            "f": bool((t or {}).get("fav")),
+        })
+    return items, tmap
+
+
+@bp.get("/api/gallery/neighbors")
+def api_gallery_neighbors():
+    """详情页跨窗无缝续览:取 after(更旧)/before(更新)方向的下一批邻图。
+    前端滑到窗口边缘时后台拼进 NEIGHBORS 数组,免去整页跳转清掉已预载缓存。"""
+    where, args, _cur = _gallery_filter()
+    after = request.args.get("after", type=int)
+    before = request.args.get("before", type=int)
+    anchor = after if after is not None else before
+    if anchor is None:
+        return jsonify({"error": "缺少 after/before 参数"}), 400
+    ctx = library.view_neighbors(anchor, where, args)
+    if not ctx:
+        return jsonify({"error": "起点不存在"}), 404
+    idx = ctx["idx"]
+    if after is not None:
+        batch = ctx["neighbors"][idx + 1:]     # 更旧方向,紧邻在前
+        next_rid = ctx["older_rid"]
+    else:
+        batch = ctx["neighbors"][:idx]         # 更新方向,紧邻在前
+        next_rid = ctx["newer_rid"]
+    items, _ = _build_neighbor_items(batch)
+    return {"items": items, "next_rid": next_rid}
+
+
 @bp.get("/gallery/view/<int:rowid>")
 def page_gallery_view(rowid):
     """详情页(全库索引定位):位置/翻页/邻图与画廊网格同一数据源。
@@ -145,39 +209,7 @@ def page_gallery_view(rowid):
     from views.helpers import image_url
 
     # 任务记录增强(按文件名关联):详情面板参数、收藏角标、再次生成
-    tmap = {}
-    names = [r["filename"] for r in ctx["neighbors"]] + [ctx["row"]["filename"]]
-    img_ids = library.task_img_id_map(names)
-    real_ids = [v["img_id"] for v in img_ids.values() if v["img_id"]]
-    if real_ids:
-        marks = ",".join("?" * len(real_ids))
-        for t in db.query(
-                f"SELECT i.id, i.filename, i.subfolder, i.type, i.fav, t.workflow_id, "
-                f"t.workflow_name, t.prompt_text, t.model, t.seed, t.created_at, t.params_json "
-                f"FROM images i JOIN tasks t ON t.id=i.task_id WHERE i.id IN ({marks})",
-                real_ids):
-            tmap[t["filename"]] = dict(t)
-
-    neighbors = []
-    for r in ctx["neighbors"]:
-        t = tmap.get(r["filename"])
-        rid = r["rowid"]
-        if t:
-            url = image_url(r["filename"], t["subfolder"], t["type"])
-            dl = image_url(r["filename"], t["subfolder"], t["type"], dl=True)
-        else:
-            url, dl = f"/libmedia/{rid}", f"/libmedia/{rid}?dl=1"
-        neighbors.append({
-            "rid": rid, "id": (t or {}).get("id"), "task": bool(t),
-            "w": (t or {}).get("workflow_id"),
-            "url": url, "dl": dl, "thumb": f"/libthumb/{rid}",
-            "prompt": (t or {}).get("prompt_text") or f"未分类 · {r['filename']}",
-            "wf": (t or {}).get("workflow_name") or "",
-            "m": _short(r["model"]),
-            "ts": (t or {}).get("created_at") or r["created_at"],
-            "f": bool((t or {}).get("fav")),
-        })
-
+    neighbors, tmap = _build_neighbor_items(ctx["neighbors"], extra_for_tmap=[ctx["row"]])
     cur_row = ctx["row"]
     t = tmap.get(cur_row["filename"])
     if t:

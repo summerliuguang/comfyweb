@@ -41,6 +41,69 @@ def _seed_task(prompt, batch, category):
     return cur.lastrowid
 
 
+class GalleryNeighborsApi(unittest.TestCase):
+    """详情页跨窗无缝续览端点:两个方向取紧邻批次,next_rid 指向再下一批。"""
+
+    def setUp(self):
+        import library
+        from datetime import datetime, timedelta
+        self.rids = []
+        for i in range(6):
+            fn = f"nb_{i:02d}"
+            _seed_task(fn, f"邻批{i % 2}", "立绘")   # 图片文件名 = {prompt}.png
+            self.rids.append(library.indexed(fn + ".png")["rowid"])
+        # created_at 错开到未来且间隔 10 秒:排序与 rowid 无关,免疫共享库同秒残留行
+        with library._lock:
+            conn = library._lib_connect()
+            base = datetime(2030, 1, 1, 10, 0)
+            for i, rid in enumerate(self.rids):
+                conn.execute("UPDATE files SET created_at=? WHERE rowid=?",
+                             ((base + timedelta(seconds=i * 10)).strftime("%Y-%m-%d %H:%M:%S"),
+                              rid))
+            conn.commit()
+
+    def tearDown(self):
+        import library
+        from views.helpers import clear_cached
+        clear_cached("gallery_filters")
+        with library._lock:
+            conn = library._lib_connect()
+            conn.execute("DELETE FROM files WHERE filename LIKE 'nb_%'")
+            conn.commit()
+        for i in range(6):
+            t = db.query_one(
+                "SELECT i.task_id FROM images i JOIN tasks t ON t.id=i.task_id "
+                "WHERE i.filename=?", (f"nb_{i:02d}.png",))
+            if t:
+                db.execute("DELETE FROM images WHERE task_id=?", (t["task_id"],))
+                db.execute("DELETE FROM tasks WHERE id=?", (t["task_id"],))
+
+    def test_after_returns_older_batch(self):
+        """after=最旧侧:取更旧方向的紧邻批次;触底时 next_rid 为空。"""
+        r = client_app.get(f"/api/gallery/neighbors?after={self.rids[5]}")
+        self.assertEqual(r.status_code, 200)
+        d = r.get_json()
+        got = [it["rid"] for it in d["items"]]
+        self.assertEqual(got[:5], self.rids[4::-1])   # 更旧方向紧邻在前(共享库有残留,前缀断言)
+        if d["next_rid"] is not None:
+            self.assertNotIn(d["next_rid"], got)
+        r2 = client_app.get(f"/api/gallery/neighbors?after={self.rids[3]}")
+        d2 = r2.get_json()
+        self.assertEqual([it["rid"] for it in d2["items"]][:3], self.rids[2::-1])
+
+    def test_before_returns_newer_batch(self):
+        """before=中间点:取更新方向的紧邻批次。"""
+        r = client_app.get(f"/api/gallery/neighbors?before={self.rids[1]}")
+        self.assertEqual(r.status_code, 200)
+        d = r.get_json()
+        got = [it["rid"] for it in d["items"]]
+        self.assertEqual(got[:4], self.rids[:1:-1])   # 更新方向紧邻在前(DESC:最新最先)
+
+    def test_missing_anchor_404(self):
+        r = client_app.get("/api/gallery/neighbors?after=99999999")
+        self.assertEqual(r.status_code, 404)
+
+
 class BatchGalleryFilters(unittest.TestCase):
     def setUp(self):
         from views.helpers import clear_cached
