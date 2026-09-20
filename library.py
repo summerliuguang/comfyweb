@@ -567,25 +567,6 @@ def private_candidates_by_workflow(workflow_id):
     return [r[0] for r in rows]
 
 
-def private_candidates_by_asset(model=None, lora=None):
-    """模型/LoRA 关联(生成时用过)的未标私密图片 rowid 列表。
-    files.model/lora 存的是生成时的模型文件名,取 basename 双重匹配覆盖子目录前缀。"""
-    base = (model or lora or "")
-    base = base.rsplit("/", 1)[-1]
-    conds, args = ["nsfw=0"], []
-    if model:
-        conds.append("(model=? OR model=? OR model LIKE '%'||?)")
-        args += [model, base, base]
-    if lora:
-        conds.append("(lora=? OR lora=? OR lora LIKE '%'||?)")
-        args += [lora, base, base]
-    with _lock:
-        conn = _lib_connect()
-        rows = conn.execute(
-            f"SELECT rowid FROM files WHERE {' AND '.join(conds)}", args).fetchall()
-    return [r[0] for r in rows]
-
-
 def migrate_to_private(rowids):
     """批量移入私密区(后台线程调用;NAS 内 rename 毫秒级)。返回成功数。"""
     done = 0
