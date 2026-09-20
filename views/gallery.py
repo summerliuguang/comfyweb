@@ -204,7 +204,7 @@ def page_gallery_view(rowid):
             "url": f"/libmedia/{rowid}",
             "download": f"/libmedia/{rowid}?dl=1",
         }
-    idx = next((i for i, n in enumerate(neighbors) if n["rid"] == rowid), 0)
+    idx = ctx["idx"]   # 服务端算好的当前图窗口位置
     qs = urlencode({k: v for k, v in request.args.items() if v.strip()})
     return render_template("gallery_detail.html", item=item, qs=qs,
                            neighbors=neighbors, idx=idx,

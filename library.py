@@ -254,19 +254,23 @@ def view_neighbors(rowid, where="", args=(), window=40):
         total = conn.execute(f"SELECT COUNT(*) FROM files {w_total}", a_total).fetchone()[0]
         w_gt, a_gt = wcond(">")
         pos = conn.execute(f"SELECT COUNT(*) FROM files {w_gt}", a_gt).fetchone()[0] + 1
-        w_le, a_le = wcond("<=")   # 当前及更新(排序靠前)
-        w_ge, a_ge = wcond(">=")   # 当前及更旧(排序靠后)
+        # 更新方向(不含自己)在前,更旧方向(不含自己)在后,自己插中间——
+        # 此前两向比较符写反(<=给了newer/>=给了older),自己出现两次且滑动方向错乱
+        w_n, a_n = wcond(">")
         newer = conn.execute(
-            f"SELECT rowid, * FROM files {w_le} ORDER BY created_at DESC, rowid DESC LIMIT ?",
-            (*a_le, window + 1)).fetchall()
+            f"SELECT rowid, * FROM files {w_n} ORDER BY created_at DESC, rowid DESC LIMIT ?",
+            (*a_n, window + 1)).fetchall()
+        w_o, a_o = wcond("<")
         older = conn.execute(
-            f"SELECT rowid, * FROM files {w_ge} ORDER BY created_at ASC, rowid ASC LIMIT ?",
-            (*a_ge, window + 1)).fetchall()
+            f"SELECT rowid, * FROM files {w_o} ORDER BY created_at DESC, rowid DESC LIMIT ?",
+            (*a_o, window + 1)).fetchall()
         newer_rid = newer[-1]["rowid"] if len(newer) > window else None
         older_rid = older[-1]["rowid"] if len(older) > window else None
-        neighbors = [dict(r) for r in list(newer[:window]) + list(reversed(older[:window]))]
+        newer_w = [dict(r) for r in newer[:window]]      # DESC:从最新到紧邻自己
+        older_w = [dict(r) for r in older[:window]]      # DESC:紧邻自己在前(滑动顺序)
+        neighbors = newer_w + [dict(cur)] + older_w
     return {"row": dict(cur), "pos": pos, "total": total, "neighbors": neighbors,
-            "newer_rid": newer_rid, "older_rid": older_rid}
+            "idx": len(newer_w), "newer_rid": newer_rid, "older_rid": older_rid}
 
 
 def get(rowid):

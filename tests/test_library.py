@@ -363,6 +363,91 @@ class TestDeleteAndTombstone(unittest.TestCase):
         self.assertIsNone(library.indexed(fn))
 
 
+class TestViewNeighbors(unittest.TestCase):
+    def setUp(self):
+        self._cleanup()
+
+    def tearDown(self):
+        self._cleanup()
+
+    def _cleanup(self):
+        with library._lock:
+            conn = library._lib_connect()
+            conn.execute("DELETE FROM files WHERE filename LIKE 'ord_%'")
+            conn.commit()
+
+    def _seed_ordered(self, n, base="2030-01-01 10:00:00"):
+        """base 用未来时间:测试库共享,其他测试留下的行(今天)必须都比它旧,
+        本类的时间序断言才不受干扰。"""
+        """造 n 张 created_at 严格递增的索引行(rid 顺序即时间顺序)。"""
+        from datetime import datetime, timedelta
+        t0 = datetime.strptime(base, "%Y-%m-%d %H:%M:%S")
+        rids = []
+        with library._lock:
+            conn = library._lib_connect()
+            for i in range(n):
+                cur = conn.execute(
+                    "INSERT INTO files(path, filename, created_at, workflow) VALUES(?,?,?,?)",
+                    (f"library/x/ord_{i:03d}.png", f"ord_{i:03d}.png",
+                     (t0 + timedelta(seconds=i)).strftime("%Y-%m-%d %H:%M:%S"), "ordwin"))
+                rids.append(cur.lastrowid)
+            conn.commit()
+        return rids
+
+    def tearDown(self):
+        with library._lock:
+            conn = library._lib_connect()
+            conn.execute("DELETE FROM files WHERE filename LIKE 'ord_%'")
+            conn.commit()
+
+    def test_middle_window_order_and_rids(self):
+        """中间图:窗口 = 更新3张+自己+更旧3张,顺序与画廊一致,跨窗 rid 指向窗口外。"""
+        rids = self._seed_ordered(10)
+        mid = rids[5]   # ord_005:更新侧 4 张(i=6..9),更旧侧 5 张(i=0..4)
+        ctx = library.view_neighbors(mid, "workflow=?", ("ordwin",), window=3)
+        seq = [n["rowid"] for n in ctx["neighbors"]]
+        self.assertEqual(seq, [rids[9], rids[8], rids[7], mid, rids[4], rids[3], rids[2]])
+        self.assertEqual(ctx["idx"], 3)                 # 自己在第 4 位
+        self.assertEqual(ctx["pos"], 5)                 # 4 张更新 → 第 5 位
+        self.assertEqual(ctx["total"], 10)
+        self.assertEqual(ctx["newer_rid"], rids[6])     # 更新方向窗口外第一张
+        self.assertEqual(ctx["older_rid"], rids[1])     # 更旧方向窗口外第一张
+        # 不再有"自己出现两次"的旧 bug
+        self.assertEqual(seq.count(mid), 1)
+
+    def test_edge_images_rid_none(self):
+        """最新图无 newer_rid,最旧图无 older_rid,方向不错乱。"""
+        rids = self._seed_ordered(8)
+        newest = rids[-1]
+        ctx = library.view_neighbors(newest, "workflow=?", ("ordwin",), window=3)
+        self.assertIsNone(ctx["newer_rid"])
+        self.assertIsNotNone(ctx["older_rid"])
+        self.assertEqual(ctx["idx"], 0)
+        self.assertEqual([n["rowid"] for n in ctx["neighbors"]][:1], [newest])
+        oldest = rids[0]
+        ctx2 = library.view_neighbors(oldest, "workflow=?", ("ordwin",), window=3)
+        self.assertIsNone(ctx2["older_rid"])
+        self.assertIsNotNone(ctx2["newer_rid"])
+        self.assertEqual(ctx2["pos"], 8)
+
+    def test_filtered_window(self):
+        """带筛选时窗口只在筛选集内,位置计数同样只算筛选集。"""
+        rids = self._seed_ordered(8)
+        with library._lock:
+            conn = library._lib_connect()
+            conn.execute("UPDATE files SET workflow='wfA' WHERE "
+                         "filename IN ('ord_002.png','ord_004.png','ord_006.png')")
+            conn.commit()
+        mid = rids[4]   # ord_004,wfA 集内:更新 1 张(006),更旧 1 张(002)
+        ctx = library.view_neighbors(mid, "workflow=?", ("wfA",), window=3)
+        seq = [n["rowid"] for n in ctx["neighbors"]]
+        self.assertEqual(seq, [rids[6], mid, rids[2]])
+        self.assertEqual(ctx["pos"], 2)
+        self.assertEqual(ctx["total"], 3)
+        self.assertIsNone(ctx["newer_rid"])   # 筛选集内更新方向只有 1 张(< window)
+        self.assertIsNone(ctx["older_rid"])
+
+
 class TestLibV2(unittest.TestCase):
     """v2 索引:迁移、全库摄取、Pillow 缩略图、分页查询。"""
 
