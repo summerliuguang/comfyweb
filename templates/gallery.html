@@ -159,7 +159,7 @@ document.querySelector('.masonry').addEventListener('click', async (e) => {
 <script>
 /* 无限滚动:底部哨兵进入视口即追加下一页;页码跳转则整页定位 */
 (function () {
-  const qs = '{{ qs }}';
+  const qs = {{ qs | tojson }};
   let page = {{ page }}, pages = {{ pages }};
   const TOTAL = {{ total }};
   const sentinel = document.getElementById('sentinel');
@@ -193,6 +193,7 @@ document.querySelector('.masonry').addEventListener('click', async (e) => {
   }
 
   function updateInfo() {
+    if (!info) return;   // 单页结果(pages<=1)时 pageInfo 未渲染
     info.textContent = `已加载第 ${page} / ${pages} 页 · 共 ${TOTAL} 张`;
   }
 
@@ -210,18 +211,20 @@ document.querySelector('.masonry').addEventListener('click', async (e) => {
       page = d.page;
       window.__masonryAdd(d.items.map(makeCard));
       updateInfo();
+      sentinel.textContent = page >= pages ? '已全部加载' : '上拉加载更多';
     } catch (e) {
-      sentinel.textContent = '加载失败: ' + e.message;
+      // 保留错误文案;unobserve→observe 重新触发交叉判定,继续上拉即可重试
+      sentinel.textContent = `加载失败: ${e.message}(继续上拉重试)`;
+      io.unobserve(sentinel);
+      requestAnimationFrame(() => io.observe(sentinel));
     }
-    sentinel.textContent = page >= pages ? '已全部加载' : '上拉加载更多';
     loading = false;
   }
 
-  if (sentinel) {
-    new IntersectionObserver((es) => {
-      if (es.some(e => e.isIntersecting)) loadNext();
-    }, { rootMargin: '400px' }).observe(sentinel);
-  }
+  const io = sentinel ? new IntersectionObserver((es) => {
+    if (es.some(e => e.isIntersecting)) loadNext();
+  }, { rootMargin: '400px' }) : null;
+  if (io) io.observe(sentinel);
   const btnJump = document.getElementById('btnJump');
   if (btnJump) btnJump.addEventListener('click', () => {
     const v = parseInt(document.getElementById('jumpInput').value, 10);

@@ -131,15 +131,17 @@ details.adv[open]>summary::before{transform:rotate(90deg)}
 .civ-grid .gitem img{width:100%;aspect-ratio:1;object-fit:cover;display:block;background:var(--bg)}
 .civ-grid .gitem .gmeta{padding:.4rem .55rem;font-size:.72rem;color:var(--muted);border-top:1px solid var(--line)}
 
-/* 画廊详情:全屏沉浸式查看器(默认黑底,可切浅色) */
-.viewer{position:fixed;inset:0;z-index:60;background:#0b0d13;touch-action:none;overflow:hidden}
+/* 画廊详情:全屏沉浸式查看器(默认黑底,可切浅色)。
+   touch-action 只收窄到手势区(v-stage/sheet-head),不设在 .viewer 上——
+   它会约束所有后代(sheet-body 的触摸滚动因此失效过) */
+.viewer{position:fixed;inset:0;z-index:60;background:#0b0d13;overflow:hidden}
 .viewer.light{background:#eef0f5}
 .viewer .v-top{position:absolute;top:0;left:0;right:0;display:flex;gap:.45rem;align-items:center;padding:.55rem .6rem;z-index:5}
 .vchip{display:inline-flex;align-items:center;gap:.3rem;padding:.32rem .7rem;border-radius:999px;border:none;background:rgba(255,255,255,.14);color:#e8ebf3;font-size:.8rem;text-decoration:none;cursor:pointer}
 .vchip:active{opacity:.8}
 .viewer.light .vchip{background:rgba(20,24,34,.1);color:#333}
 .v-count{background:none;pointer-events:none}
-.viewer .v-stage{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
+.viewer .v-stage{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;touch-action:none}
 .viewer .v-stage img{max-width:100vw;max-height:100vh;max-height:100dvh;width:auto;height:auto;object-fit:contain;display:block;touch-action:none}
 .viewer .v-stage img.snapping{transition:transform .22s ease}
 .viewer .v-stage img.anim-next{animation:vSlideNext .2s ease}
@@ -164,11 +166,11 @@ details.adv[open]>summary::before{transform:rotate(90deg)}
   max-height:62vh;max-height:62dvh;border-radius:14px 14px 0 0;overflow:hidden;
   background:rgba(24,28,40,.94);color:#dfe3ee;backdrop-filter:blur(10px)}
 .viewer.light .sheet{background:rgba(255,255,255,.96);color:#333}
-.sheet-head{padding:.6rem .9rem .55rem;cursor:pointer;flex:none}
+.sheet-head{padding:.6rem .9rem .55rem;cursor:pointer;flex:none;touch-action:none}
 .s-prompt{font-size:.8rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .s-row2{display:flex;justify-content:space-between;gap:.6rem;margin-top:.22rem;font-size:.72rem;opacity:.75}
 .s-row2 .s-meta{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.sheet-body{overflow-y:auto;padding:0 .9rem calc(1rem + env(safe-area-inset-bottom))}
+.sheet-body{overflow-y:auto;touch-action:pan-y;padding:0 .9rem calc(1rem + env(safe-area-inset-bottom))}
 .sheet .kv{width:100%;border-collapse:collapse;font-size:.85rem;margin-top:.3rem}
 .sheet .kv td{padding:.4rem .2rem;border-bottom:1px solid rgba(128,138,160,.25);vertical-align:top}
 .sheet .kv td:first-child{color:inherit;opacity:.6;width:8rem;white-space:nowrap}
@@ -232,3 +234,7 @@ details.adv[open]>summary::before{transform:rotate(90deg)}
   table.mobile-cards td::before{content:attr(data-label);font-weight:600;font-size:.72rem;color:var(--muted);flex:none}
   table.mobile-cards td[colspan]{display:block;text-align:center}
 }
+
+/* hidden 属性兜底:Bulma 0.9.4 无此规则,凡 author 层给元素设了 display
+   (.vchip/.pager/.select 等),hidden 会被覆盖失效(实测坑) */
+[hidden]{display:none!important}

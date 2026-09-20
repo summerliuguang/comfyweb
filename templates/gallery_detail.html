@@ -35,7 +35,7 @@
 {% block scripts %}
 <script>
 (function () {
-  const qs = '{{ qs }}';
+  const qs = {{ qs | tojson }};
   const NEIGHBORS = {{ neighbors | tojson }};
   const GEN_ON = {{ features.gen | tojson }};
   const BASE_POS = {{ pos }}, TOTAL = {{ total }}, IDX0 = {{ idx }};
@@ -95,8 +95,10 @@
       c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
 
+  let sheetSeq = 0;   // 快速连切时丢弃过期响应,防止面板显示上一张的参数
   async function renderSheetBody(it) {
     if (sheetBody.hidden) return;
+    const seq = ++sheetSeq;
     if (!paramsCache[it.rid]) {
       sheetBody.innerHTML = '<p class="hint" style="padding:.4rem 0">加载参数…</p>';
       let d;
@@ -106,6 +108,7 @@
         d = await r.json();
         if (!r.ok) throw new Error(d.error || r.status);
       } catch (e) {
+        if (seq !== sheetSeq) return;
         sheetBody.innerHTML = `<p class="task-err">参数加载失败: ${esc(e.message)}</p>`;
         return;
       }
@@ -147,6 +150,7 @@
           '</div>';
       }
     }
+    if (seq !== sheetSeq) return;
     sheetBody.innerHTML = paramsCache[it.rid];
   }
 
@@ -246,6 +250,7 @@
   });
   let wheelLock = 0;
   document.addEventListener('wheel', (e) => {
+    if (e.target.closest('.sheet')) return;   // 参数面板上滚轮=滚面板,不切图
     const now = Date.now();
     if (now - wheelLock < 500 || Math.abs(e.deltaY) < 20) return;
     wheelLock = now;

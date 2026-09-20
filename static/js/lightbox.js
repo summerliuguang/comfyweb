@@ -99,9 +99,13 @@
   function bind() {
     root.querySelector('.lb-close').addEventListener('click', close);
 
+    let wheelLock = 0;   // 触控板一格滚动会连发多个 wheel,不加锁一次跳好几张
     root.addEventListener('wheel', (e) => {
       e.preventDefault();
       if (mode === 'browse') {
+        const now = Date.now();
+        if (now - wheelLock < 350) return;
+        wheelLock = now;
         if (e.deltaY > 0) step(1); else if (e.deltaY < 0) step(-1);
       } else {
         scale = Math.min(6, Math.max(1, scale * (e.deltaY < 0 ? 1.15 : 0.87)));

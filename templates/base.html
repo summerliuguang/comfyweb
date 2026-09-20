@@ -20,6 +20,8 @@
     root.style.colorScheme = dark ? 'dark' : 'light';
     /* 样式表加载前先把画布刷成主题底色,避免夜间模式闪白(色值须与 skin.css 的 --bg 一致) */
     root.style.background = dark ? '#12141c' : '#f6f7fb';
+    /* 所有入口(设置页/抽屉三档/顶栏快捷钮)统一在此持久化 */
+    try { localStorage.setItem('comfyweb.theme', t); } catch (e) {}
   }
   window.comfyTheme = apply;
   try { apply(localStorage.getItem('comfyweb.theme') || 'system'); } catch (e) {}
