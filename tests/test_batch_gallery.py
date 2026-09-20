@@ -42,6 +42,10 @@ def _seed_task(prompt, batch, category):
 
 
 class BatchGalleryFilters(unittest.TestCase):
+    def setUp(self):
+        from views.helpers import clear_cached
+        clear_cached("gallery_filters")  # 造数前缓存的空选项失效,下拉反映当前数据
+
     def test_filter_by_category_and_batch(self):
         img_a = _seed_task("仙子立绘", "修仙批次", "立绘")
         img_b = _seed_task("丹炉特写", "修仙批次", "图标")

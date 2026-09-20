@@ -5,17 +5,21 @@
 读路径:已归档的原图(本地 data/images → 可配置存储目录)优先,未归档的回源 ComfyUI。
 """
 import os
+import threading
 from pathlib import Path
 from urllib.parse import quote as urlquote
 from uuid import uuid4
 
-from flask import Blueprint, Response, request
+from flask import Blueprint, Response, redirect, request
 
 from comfy_client import ComfyError, client
 
 from views.helpers import err, img_cache_get, img_cache_store
 
 bp = Blueprint("media", __name__)
+
+# 现场生成缩略图的并发上限:首屏 24 张全缺时防止 8 个 gthread 全部阻塞在 CIFS 读
+_thumb_gen_sema = threading.Semaphore(2)
 
 _CTYPE = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
           ".webp": "image/webp", ".gif": "image/gif"}
@@ -81,9 +85,12 @@ def image_proxy():
         ck = f"img:{img_type}:{subfolder}:{filename}:{preview}"
         cached_path, cached_ct = img_cache_get(ck)
         if cached_path:
-            return Response(cached_path.read_bytes(),
-                            content_type=cached_ct or "image/jpeg",
-                            headers={"Cache-Control": "public, max-age=604800"})
+            try:
+                return Response(cached_path.read_bytes(),
+                                content_type=cached_ct or "image/jpeg",
+                                headers={"Cache-Control": "public, max-age=604800"})
+            except OSError:
+                pass  # 缓存被并发淘汰:视为未命中,走回源(四级回退自愈)
     else:
         # 原图:已归档的优先读归档(ComfyUI 侧清理输出后仍可看)
         fb = _archived_fallback(filename, subfolder, img_type)
@@ -129,8 +136,11 @@ def lib_thumb(rowid):
     ck = "libthumb:" + row["path"]
     cached_path, cached_ct = img_cache_get(ck)
     if cached_path:
-        return Response(cached_path.read_bytes(), content_type=cached_ct or "image/webp",
-                        headers={"Cache-Control": "public, max-age=604800"})
+        try:
+            return Response(cached_path.read_bytes(), content_type=cached_ct or "image/webp",
+                            headers={"Cache-Control": "public, max-age=604800"})
+        except OSError:
+            pass  # 缓存被并发淘汰:视为未命中
     body = None
     if row["thumb"]:
         try:
@@ -138,7 +148,14 @@ def lib_thumb(rowid):
         except OSError:
             body = None
     if body is None:
-        body = library.thumb_generate(row)  # 现场生成并回填索引/NAS
+        # 现场生成(读 CIFS 原图 + Pillow)有并发上限;超限时先用原图顶替,
+        # 后台 thumb_sweep 会继续补齐缩略图
+        if not _thumb_gen_sema.acquire(blocking=False):
+            return redirect(f"/libmedia/{rowid}", 302)
+        try:
+            body = library.thumb_generate(row)  # 现场生成并回填索引/NAS
+        finally:
+            _thumb_gen_sema.release()
         if body is None:
             return err("缩略图不可用", 404)
     img_cache_store(ck, body, "image/webp")

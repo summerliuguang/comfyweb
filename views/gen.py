@@ -410,7 +410,7 @@ def api_workflow_update(wid):
             return err("没有可用的参数定义")
         tpl["params"] = params
     save_tpl(wid, tpl)
-    db.update_workflow_meta(wid, name=tpl["name"])
+    db.execute("UPDATE workflows SET name=? WHERE id=?", (tpl["name"], int(wid)))
     if "enabled" in data:
         db.execute("UPDATE workflows SET enabled=? WHERE id=?",
                    (1 if data.get("enabled") else 0, int(wid)))

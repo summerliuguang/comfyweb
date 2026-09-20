@@ -6,6 +6,7 @@ progress 与 executing{node:null} 完成信号),任务完成后从 /history 取�
 """
 import ipaddress
 import json
+import logging
 import os
 import socket
 import threading
@@ -17,6 +18,8 @@ import requests
 from urllib.parse import quote, urlsplit
 
 import db
+
+log = logging.getLogger("comfyweb")
 
 CLIENT_ID = "comfyweb-" + uuid.uuid4().hex[:12]
 
@@ -66,7 +69,7 @@ def reconcile_active_tasks(rows):
             elif age > 10:
                 client.finalize_from_history(t["prompt_id"])
         except Exception:
-            pass
+            log.exception("对账任务 %s(prompt_id=%s)失败", t["id"], t["prompt_id"])
 
 
 WS_RETRY_LIMIT = 3       # 连续失败次数上限,超过即停止重连,等用户手动重连
@@ -79,6 +82,7 @@ class ComfyClient:
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._ws_fail_count = 0   # 连续失败计数,连上即清零
+        self._ever_connected = False  # 本进程曾连上过(掉线重试窗口据此放行 HTTP)
         self.ws_state = "未启动"
         self.last_event_ts = 0.0
         self.on_connect = None  # WS 连上后回调(后台线程执行),供上层预热缓存
@@ -217,12 +221,12 @@ class ComfyClient:
     def record_progress(self, prompt_id, value, mx):
         if not prompt_id or not mx:
             return
-        db.execute(
-            "UPDATE tasks SET status='running' WHERE prompt_id=? AND status IN ('queued','running')",
-            (prompt_id,),
-        )
         pct = max(0.0, min(100.0, float(value) / float(mx) * 100.0))
-        db.execute("UPDATE tasks SET progress=? WHERE prompt_id=? AND status='running'", (pct, prompt_id))
+        db.execute(
+            "UPDATE tasks SET status='running', progress=? "
+            "WHERE prompt_id=? AND status IN ('queued','running')",
+            (pct, prompt_id),
+        )
 
     def finalize_from_history(self, prompt_id, forced_status=None, error=""):
         """从 /history 读取 prompt 结果并落库。WS 事件与轮询对账共用。"""
@@ -261,7 +265,7 @@ class ComfyClient:
                 if img_type == "output" and filename:
                     storage.enqueue(filename, subfolder, img_type)
         except Exception:
-            pass
+            log.warning("任务 %s 归档入队失败(将靠扫描兜底)", rows[0]["id"], exc_info=True)
         final = forced_status or "done"
         db.execute(
             "UPDATE tasks SET status=?, error=?, progress=100, finished_at=datetime('now','localtime') "
@@ -270,13 +274,11 @@ class ComfyClient:
         )
 
     def _insert_images(self, task_id, images):
-        for filename, subfolder, img_type in images:
-            if not filename:
-                continue
-            db.execute(
+        rows = [(task_id, f, sf, t) for f, sf, t in images if f]
+        if rows:
+            db.executemany(
                 "INSERT OR IGNORE INTO images(task_id, filename, subfolder, type) VALUES(?,?,?,?)",
-                (task_id, filename, subfolder, img_type),
-            )
+                rows)
 
     def _mark(self, prompt_id, status, error=""):
         db.execute(
@@ -318,6 +320,7 @@ class ComfyClient:
                     ws_url, timeout=10, sslopt=sslopt if sslopt else None)
                 connected = True
                 self._ws_fail_count = 0
+                self._ever_connected = True
                 self.ws_state = "已连接"
                 if self.on_connect:
                     threading.Thread(target=self.on_connect, daemon=True).start()
@@ -337,7 +340,9 @@ class ComfyClient:
             except Exception:
                 self._ws_fail_count += 1
                 if self._ws_fail_count < WS_RETRY_LIMIT:
-                    self.ws_state = f"连接失败({self._ws_fail_count}/{WS_RETRY_LIMIT}),将重试"
+                    # 曾连上后掉线:WS 断 ≠ HTTP 断,重试窗口内放行远端数据接口
+                    self.ws_state = ("已断开,正在重连" if self._ever_connected else
+                                     f"连接失败({self._ws_fail_count}/{WS_RETRY_LIMIT}),将重试")
                 else:
                     self.ws_state = "连接失败,请手动重连"
             finally:
@@ -359,6 +364,7 @@ class ComfyClient:
     def reset_reconnect(self):
         """手动重连:清零失败计数并确保 WS 线程在跑。"""
         self._ws_fail_count = 0
+        self._ever_connected = False
         self.ensure_ws()
 
     def _handle_event(self, msg):

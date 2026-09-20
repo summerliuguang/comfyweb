@@ -154,9 +154,12 @@ def civitai_image_proxy():
     ck = "civ:" + u
     cached_path, cached_ct = img_cache_get(ck)
     if cached_path:
-        return Response(cached_path.read_bytes(),
-                        content_type=cached_ct or "image/jpeg",
-                        headers={"Cache-Control": "public, max-age=604800"})
+        try:
+            return Response(cached_path.read_bytes(),
+                            content_type=cached_ct or "image/jpeg",
+                            headers={"Cache-Control": "public, max-age=604800"})
+        except OSError:
+            pass  # 缓存被并发淘汰:视为未命中,走在线拉取
     try:
         r = civitai.fetch_image(u)
     except civitai.CivitaiError as e:

@@ -22,14 +22,29 @@ FEATURE_FLAGS = {"gen": "ENABLE_GEN", "gallery": "ENABLE_GALLERY",
                  "batch": "ENABLE_BATCH"}
 TOGGLE_FEATURES = tuple(FEATURE_FLAGS)
 
+_feat_cache = {}          # name -> (expires_at, value);每请求最多 6 次开关查询
+FEAT_CACHE_TTL = 3.0
+
 
 def feature_enabled(name):
-    """功能是否启用:数据库设置优先,其次 ENABLE_* 环境变量,默认开。"""
+    """功能是否启用:数据库设置优先,其次 ENABLE_* 环境变量,默认开。
+    3 秒进程内缓存;写开关后调 feature_cache_invalidate() 即时生效。"""
+    now = time.time()
+    hit = _feat_cache.get(name)
+    if hit and now < hit[0]:
+        return hit[1]
     v = db.get_setting("enable_" + name)
     if v:
-        return v == "1"
-    flag = FEATURE_FLAGS.get(name)
-    return not flag or os.environ.get(flag, "1").strip().lower() in ("1", "true", "on")
+        val = v == "1"
+    else:
+        flag = FEATURE_FLAGS.get(name)
+        val = not flag or os.environ.get(flag, "1").strip().lower() in ("1", "true", "on")
+    _feat_cache[name] = (now + FEAT_CACHE_TTL, val)
+    return val
+
+
+def feature_cache_invalidate():
+    _feat_cache.clear()
 
 _cache = {}
 _cache_lock = threading.Lock()

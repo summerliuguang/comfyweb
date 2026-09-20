@@ -4,7 +4,7 @@ from flask import Blueprint, render_template, request
 import db
 from comfy_client import ComfyError, client
 
-from views.helpers import TOGGLE_FEATURES, clear_cached, err, feature_enabled
+from views.helpers import (TOGGLE_FEATURES, clear_cached, err, feature_cache_invalidate, feature_enabled)
 
 bp = Blueprint("admin", __name__)
 
@@ -174,6 +174,7 @@ def api_features_set():
         return err("无效的功能名")
     enabled = bool(d.get("enabled"))
     db.set_setting("enable_" + name, "1" if enabled else "0")
+    feature_cache_invalidate()   # 绕过 3s 缓存,开关即时生效
     return {"ok": True, "feature": name, "enabled": enabled}
 
 

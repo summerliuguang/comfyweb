@@ -199,6 +199,16 @@ def execute(sql, args=()):
     return cur
 
 
+def executemany(sql, args_list):
+    """批量执行(单次事务);args_list 为空时是安全的 no-op。"""
+    if not args_list:
+        return None
+    db = get_db()
+    cur = db.executemany(sql, args_list)
+    db.commit()
+    return cur
+
+
 def get_setting(key, default=""):
     row = query_one("SELECT value FROM settings WHERE key=?", (key,))
     return row["value"] if row else default
@@ -224,16 +234,6 @@ def prune_tasks():
     row = query_one("SELECT id FROM tasks ORDER BY id DESC LIMIT 1 OFFSET ?", (keep - 1,))
     if row:
         execute("DELETE FROM tasks WHERE id < ?", (row["id"],))  # 第 keep 条本身保留
-
-
-def update_workflow_meta(wid, name=None, template_json=None, filename=None):
-    """兼容辅助:优先写 template_json;filename 仅为旧库迁移保留。"""
-    if template_json is not None:
-        execute("UPDATE workflows SET template_json=? WHERE id=?", (template_json, int(wid)))
-    if name is not None:
-        execute("UPDATE workflows SET name=? WHERE id=?", (name, int(wid)))
-    if filename is not None:
-        execute("UPDATE workflows SET filename=? WHERE id=?", (filename, int(wid)))
 
 
 def get_workflow_template(wid):

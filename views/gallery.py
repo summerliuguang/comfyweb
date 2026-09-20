@@ -63,7 +63,7 @@ def _gallery_items(where, args, page):
     rows, total = library.page_query(where, args, page, PAGE_SIZE)
     pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
     page = min(page, pages)
-    if rows is not None and page != _parse_page():  # 超出末页时回落
+    if page != _parse_page():  # 超出末页时回落
         rows, total = library.page_query(where, args, page, PAGE_SIZE)
     img_ids = library.task_img_id_map([r["filename"] for r in rows])
     items = []

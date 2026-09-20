@@ -7,6 +7,7 @@
 图片自动进入画廊(工作流名「批量生成」,可按模型筛选)。
 """
 import json
+import logging
 import os
 import re
 import secrets
@@ -16,6 +17,8 @@ import time
 import db
 from comfy_client import ComfyError, client
 import hoststats
+
+log = logging.getLogger("comfyweb")
 
 MAX_BATCH = 60
 BATCH_WF_NAME = "批量生成"
@@ -292,7 +295,7 @@ def _wait_task(prompt_id):
             try:
                 client.finalize_from_history(prompt_id)
             except Exception:
-                pass
+                log.exception("批量任务对账失败 prompt_id=%s", prompt_id)
     return "timeout"
 
 

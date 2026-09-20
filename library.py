@@ -16,6 +16,7 @@
 - reverse(filename) 把已收编的图还原回 output/ 并删索引行,作回滚保底。
 """
 import json
+import logging
 import re
 import shutil
 import sqlite3
@@ -25,6 +26,8 @@ from datetime import date, datetime
 from pathlib import Path
 
 import db
+
+log = logging.getLogger("comfyweb")
 
 SHARD_LIMIT = 500          # 单目录图片上限,超过开 _002 分片
 LIB_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
@@ -327,7 +330,7 @@ def thumb_generate(row):
             conn.commit()
         return body
     except Exception as e:
-        print(f"缩略图生成失败 {row.get('filename')}: {e}")
+        log.warning("缩略图生成失败 %s: %s", row.get("filename"), e)
         return None
 
 
@@ -388,7 +391,7 @@ def ingest_refresh():
                            tags, st.st_size, "ingest", ctime)
                 changed += 1
     except OSError as e:
-        print(f"全库摄取失败: {e}")
+        log.warning("全库摄取失败: %s", e)
     return changed
 
 
@@ -496,7 +499,7 @@ def collect_once(limit=50):
         try:
             shutil.move(str(p), str(dest))  # NAS 内移动,秒级
         except OSError as e:
-            print(f"收编移动失败 {p.name}: {e}")
+            log.warning("收编移动失败 %s: %s", p.name, e)
             continue
         rel = Path(library_dir().name) / dest.relative_to(library_dir())
         _index_add(rel, p.name, None,
@@ -534,12 +537,13 @@ def snapshot():
 
 
 def reverse(filename):
-    """回滚:把已收编的图还原回 output/ 根并删除索引行(含缩略图)。"""
+    """回滚:把已收编的图还原回 output/ 根并删除索引行(含缩略图)。
+    运维工具(迁移回滚保底),无路由暴露;入参过 _safe_name 防路径穿越。"""
     row = indexed(filename)
     if not row:
         return False
     lib_file = nas_root() / row["path"]
-    out = output_dir() / filename
+    out = output_dir() / _safe_name(filename, 200)
     out.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(lib_file), str(out))
     if row["thumb"]:
@@ -579,6 +583,6 @@ def status():
                       if p.is_file() and p.suffix.lower() in LIB_EXTENSIONS
                       and not indexed(p.name))
     except OSError:
-        pass
+        log.warning("library status 统计待收编失败", exc_info=True)
     return {"indexed": n, "unclassified": un, "ingested": ing, "no_thumb": nothumb,
             "last_snapshot": last, "pending": pending}

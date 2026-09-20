@@ -360,6 +360,8 @@ class ApiSmoke(unittest.TestCase):
         import app as app_mod
         os.environ["ENABLE_CIVITAI"] = "0"
         try:
+            from views.helpers import feature_cache_invalidate
+            feature_cache_invalidate()  # 模块级缓存跨 app 实例,先清再建
             app2 = app_mod.create_app()
             self.assertTrue(app2.config["FEATURES"]["civitai"])  # 模块仍加载,由门控拦截
             c = app2.test_client()
@@ -370,6 +372,8 @@ class ApiSmoke(unittest.TestCase):
             self.assertNotIn('href="/models"', html)  # 菜单入口已隐藏
         finally:
             os.environ.pop("ENABLE_CIVITAI", None)
+            from views.helpers import feature_cache_invalidate
+            feature_cache_invalidate()  # env 还原后清缓存,后续用例不受本测试影响
 
     def test_feature_toggle_from_settings(self):
         """设置页开关(存数据库)即时生效:关闭即 404+菜单隐藏,重开恢复。"""
@@ -388,6 +392,8 @@ class ApiSmoke(unittest.TestCase):
         r = c.post("/api/features", json={"feature": "admin", "enabled": False})
         self.assertEqual(r.status_code, 400)
         db.set_setting("enable_gallery", "")  # 还原为跟随默认,避免影响其他用例
+        from views.helpers import feature_cache_invalidate
+        feature_cache_invalidate()
 
     def test_image_proxy_survives_gen_disabled(self):
         """/image 是画廊/收藏共用的基础设施:关闭 gen 后图片代理仍可用。"""
@@ -395,6 +401,8 @@ class ApiSmoke(unittest.TestCase):
         import app as app_mod
         os.environ["ENABLE_GEN"] = "0"
         try:
+            from views.helpers import feature_cache_invalidate
+            feature_cache_invalidate()  # 模块级缓存跨 app 实例,先清再建
             app2 = app_mod.create_app()
             c = app2.test_client()
             self.assertEqual(c.get("/").status_code, 404)  # gen 已关
@@ -403,6 +411,8 @@ class ApiSmoke(unittest.TestCase):
             self.assertTrue(r.data.startswith(b"\x89PNG"))
         finally:
             os.environ.pop("ENABLE_GEN", None)
+            from views.helpers import feature_cache_invalidate
+            feature_cache_invalidate()  # env 还原后清缓存,后续用例不受本测试影响
 
     def test_prune_tasks(self):
         """记录清理:保留最近 record_keep 条,最旧的连图片记录一起删除。"""
