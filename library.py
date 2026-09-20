@@ -212,6 +212,9 @@ def _lib_connect():
         if "pre_nsfw_path" not in cols:
             conn.execute("ALTER TABLE files ADD COLUMN pre_nsfw_path TEXT")
         conn.execute("UPDATE files SET seed=NULL WHERE seed=''")  # 旧写入把空串塞进过 INTEGER 列
+        conn.execute("UPDATE files SET model='' WHERE model!='' AND "
+                     "model NOT LIKE '%.safetensors' AND model NOT LIKE '%.ckpt' "
+                     "AND model NOT LIKE '%.pt' AND model NOT LIKE '%.sft'")  # 手工目录名曾被误存为模型
         conn.execute("UPDATE files SET pre_nsfw_path=REPLACE(path, 'library/nsfw/', 'library/') "
                      "WHERE nsfw=1 AND (pre_nsfw_path IS NULL OR pre_nsfw_path='') "
                      "AND path LIKE 'library/nsfw/%'")
@@ -699,7 +702,7 @@ def ingest_refresh():
                     tags = [t for t in (dirname, meta.get("category"),
                                         meta.get("batch"), meta.get("workflow")) if t]
                 else:
-                    model, tags = dirname, [dirname]
+                    model, tags = "", [dirname]   # 目录名不是模型,只留作标签
                 _index_add(rel, f.name, None, model, meta.get("category") if meta else "",
                            meta.get("batch") if meta else "",
                            meta.get("workflow") if meta else "",
