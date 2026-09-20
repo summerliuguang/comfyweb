@@ -247,12 +247,13 @@ def page_gallery_detail(img_id):
     return redirect(f"/gallery/view/{lib['rowid']}" + (f"?{qs}" if qs else ""), 302)
 
 
-@bp.post("/api/gallery/image/<int:img_id>/delete")
-def api_gallery_delete(img_id):
-    row = db.query_one("SELECT id FROM images WHERE id=?", (img_id,))
-    if not row:
-        return jsonify({"error": "图片不存在"}), 404
-    db.execute("DELETE FROM images WHERE id=?", (img_id,))
+@bp.post("/api/library/image/<int:rowid>/delete")
+def api_library_image_delete(rowid):
+    """彻底删除图片:正本/缩略图/本地缓冲/索引/任务图片记录一并删除,记墓碑
+    防 GPU 同步回流复活;tasks 行保留(同任务多图与再次生成不受影响)。"""
+    ok, error = library.delete_image(rowid)
+    if not ok:
+        return jsonify({"error": error}), (404 if error == "图片不存在" else 502)
     return {"ok": True}
 
 

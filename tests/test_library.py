@@ -294,6 +294,75 @@ class TestEmbeddedParams(unittest.TestCase):
         self.assertIn("best quality", row["params_json"])
 
 
+class TestDeleteAndTombstone(unittest.TestCase):
+    def _place_with_task(self, fn):
+        """造一张有任务记录、已入索引的图,返回 (src_path, task_id, img_id)。"""
+        src = Path(tempfile.mkdtemp()) / fn
+        _make_png(src)
+        cur = db.execute(
+            "INSERT INTO tasks(workflow_name, prompt_text, status) VALUES('t','p','done')")
+        img = db.execute(
+            "INSERT INTO images(task_id, filename, subfolder, type) VALUES(?,?,'','output')",
+            (cur.lastrowid, fn))
+        library.place(src, fn)
+        return src, cur.lastrowid, img.lastrowid
+
+    def test_delete_image_removes_everything(self):
+        """删除:正本/缩略图/本地缓冲/索引行/任务图片记录全清,墓碑在册,tasks 行保留。"""
+        import storage
+        fn = "delme_001_.png"
+        src, task_id, img_id = self._place_with_task(fn)
+        row = library.indexed(fn)
+        library.thumb_generate(row)   # 生成缩略图再删,验证平行树清理
+        row = library.indexed(fn)
+        thumb_path = library.nas_root() / row["thumb"]
+        self.assertTrue(thumb_path.exists())
+        local_copy = storage.LOCAL_DIR / "output" / fn
+        local_copy.parent.mkdir(parents=True, exist_ok=True)
+        local_copy.write_bytes(b"LOCAL")   # 本地缓冲副本(复活源)
+
+        lib_copy = library.nas_root() / library.indexed(fn)["path"]   # library 树正本
+        ok, err = library.delete_image(library.indexed(fn)["rowid"])
+        self.assertTrue(ok, err)
+        self.assertFalse(lib_copy.exists())                            # 正本已删
+        self.assertIsNone(library.indexed(fn))                         # 索引行已删
+        self.assertFalse(thumb_path.exists())                          # 缩略图已删
+        self.assertFalse(local_copy.exists())                          # 本地副本已清
+        self.assertTrue(library._is_tombstoned(fn))                    # 墓碑在册
+        self.assertIsNone(db.query_one("SELECT id FROM images WHERE id=?", (img_id,)))
+        self.assertIsNotNone(db.query_one("SELECT id FROM tasks WHERE id=?", (task_id,)))
+        # output 原位文件已删(place 会把图移进 library,src 已不存在)
+
+    def test_tombstone_blocks_place_and_collect(self):
+        """复活路径 1/2:墓碑文件 place 被拒;GPU 同步推回 output 的副本被收编清掉。"""
+        fn = "tomb_001_.png"
+        src, _, _ = self._place_with_task(fn)
+        library.delete_image(library.indexed(fn)["rowid"])
+        # 重新 place 同名文件:拒绝入库
+        src2 = Path(tempfile.mkdtemp()) / fn
+        src2.write_bytes(b"REBORN")
+        self.assertIsNone(library.place(src2, fn))
+        self.assertIsNone(library.indexed(fn))
+        # GPU 同步把它推回 output 根:收编时清掉,不索引
+        out_copy = library.output_dir() / fn
+        out_copy.write_bytes(b"SYNCED")
+        library.collect_once(limit=50)
+        self.assertFalse(out_copy.exists())
+        self.assertIsNone(library.indexed(fn))
+
+    def test_tombstone_blocks_ingest(self):
+        """复活路径 3:手工子目录里的墓碑同名文件不被摄取索引。"""
+        fn = "ing_001_.png"
+        src, _, _ = self._place_with_task(fn)
+        library.delete_image(library.indexed(fn)["rowid"])
+        sub = library.output_dir() / "myproj2"
+        sub.mkdir(parents=True, exist_ok=True)
+        f = sub / fn
+        f.write_bytes(b"PNGDATA")
+        library.ingest_refresh()
+        self.assertIsNone(library.indexed(fn))
+
+
 class TestLibV2(unittest.TestCase):
     """v2 索引:迁移、全库摄取、Pillow 缩略图、分页查询。"""
 

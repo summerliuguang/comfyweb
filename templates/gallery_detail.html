@@ -136,6 +136,7 @@
           rows2.map(([k, v]) => `<tr><td>${k}</td><td class="val">${v}</td></tr>`).join('') +
           '</table><div class="buttons" style="margin-top:.9rem">' +
           `<a class="button is-link is-small" href="${it.dl}" download>下载原图</a>` +
+          '<button class="button is-danger is-light is-small" id="btnDelete">删除图片</button>' +
           '</div>';
         // 已解析出参数的才缓存;还没扫到的下次展开重拉(后台 sweep 很快补齐)
         if (seq !== sheetSeq) return;   // 快速连切时丢弃过期响应
@@ -164,7 +165,7 @@
           rows.map(([k, v]) => `<tr><td>${k}</td><td class="val">${v}</td></tr>`).join('') +
           '</table><div class="buttons" style="margin-top:.9rem">' +
           `<a class="button is-link is-small" href="${dl}" download>下载原图</a>${again}` +
-          (it.task ? '<button class="button is-danger is-light is-small" id="btnDelete">删除记录</button>' : '') +
+          '<button class="button is-danger is-light is-small" id="btnDelete">删除图片</button>' +
           '</div>';
       }
     }
@@ -176,10 +177,10 @@
   sheetBody.addEventListener('click', async (e) => {
     if (e.target.id !== 'btnDelete') return;
     const curIt = NEIGHBORS[cur];
-    if (!curIt || !curIt.task) return;
-    if (!confirm('从画廊删除这条图片记录?')) return;
+    if (!curIt) return;
+    if (!confirm('彻底删除这张图片?(正本/缩略图/任务记录一并删除,不可逆)')) return;
     try {
-      const r = await fetch(`/api/gallery/image/${curIt.id}/delete`, { method: 'POST' });
+      const r = await fetch(`/api/library/image/${curIt.rid}/delete`, { method: 'POST' });
       if (r.ok) {
         delete paramsCache[curIt.rid];   // 缓存键是 rid(此前错用任务 id,永远删不中)
         NEIGHBORS.splice(cur, 1);

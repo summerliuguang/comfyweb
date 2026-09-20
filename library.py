@@ -194,6 +194,9 @@ def _lib_connect():
         conn.commit()
         conn.execute("CREATE INDEX IF NOT EXISTS idx_files_created ON files(created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_files_filename ON files(filename)")
+        conn.execute("""CREATE TABLE IF NOT EXISTS deleted_files(
+            filename TEXT PRIMARY KEY,
+            deleted_at TEXT DEFAULT (datetime('now','localtime')))""")
         _lib_conn = conn
     return _lib_conn
 
@@ -497,6 +500,33 @@ def params_sweep(limit=20):
     return done
 
 
+def delete_image(rowid):
+    """彻底删除图片:正本+缩略图+本地缓冲+索引行+任务图片记录,并记墓碑
+    防止 GPU 同步/本地缓冲补同步/收编/补拉把图重新带回。正本在 output 手工
+    子目录的(原地索引未移动)删的就是 output 里的文件。tasks 行不动——
+    同任务多图与"再次生成"不受影响。返回 (ok, error)。"""
+    row = get(rowid)
+    if not row:
+        return False, "图片不存在"
+    filename = row["filename"]
+    try:
+        target = nas_root() / row["path"]
+        target.unlink(missing_ok=True)
+        if row["thumb"]:
+            (nas_root() / row["thumb"]).unlink(missing_ok=True)
+    except OSError as e:
+        return False, f"文件删除失败(NAS 不可用?): {e.__class__.__name__}"
+    import storage
+    storage.remove_local(filename)   # 本地缓冲副本是复活源,一并清掉
+    with _lock:
+        conn = _lib_connect()
+        conn.execute("INSERT OR REPLACE INTO deleted_files(filename) VALUES(?)", (filename,))
+        conn.execute("DELETE FROM files WHERE rowid=?", (rowid,))
+        conn.commit()
+    db.execute("DELETE FROM images WHERE filename=?", (filename,))
+    return True, ""
+
+
 # ---------- 全库摄取(output/ 手工子目录原地索引,不移动文件) ----------
 
 def ingest_refresh():
@@ -516,6 +546,8 @@ def ingest_refresh():
             for f in sub.rglob("*"):
                 if not f.is_file() or f.suffix.lower() not in LIB_EXTENSIONS:
                     continue
+                if _is_tombstoned(f.name):
+                    continue   # 已删除过的图不重新索引(不删,手工子目录是用户自留地)
                 rel = f.relative_to(nas_root())
                 try:
                     st = f.stat()
@@ -600,11 +632,23 @@ def task_img_id_map(filenames):
     return {r["filename"]: {"img_id": r["img_id"], "fav": bool(r["fav"])} for r in rows}
 
 
+def _is_tombstoned(filename):
+    """已删除图片的墓碑:GPU 同步回流/本地缓冲补同步/收编/摄取都会重新带图,
+    四条路径据此跳过,否则删除的图会悄悄复活。"""
+    with _lock:
+        row = _lib_connect().execute(
+            "SELECT 1 FROM deleted_files WHERE filename=? LIMIT 1", (filename,)).fetchone()
+    return bool(row)
+
+
 def place(local_path: Path, filename, source="archive"):
     """把本地已有文件放入 library 树(分类 + 复制 + 缩略图延后 + 索引)。
 
-    library 已有不低于本地质量的副本时跳过复制,只补索引。返回相对 nas_root 的路径。
+    library 已有不低于本地质量的副本时跳过复制,只补索引。返回相对 nas_root 的路径;
+    文件名在墓碑表里(用户已删除)时返回 None,调用方应清理本地副本。
     """
+    if _is_tombstoned(filename):
+        return None
     meta = lookup_task_meta(filename)
     parent, tags = classify(filename, meta)
     dest_dir = _shard_dir(library_dir() / parent)
@@ -638,6 +682,14 @@ def collect_once(limit=50):
     for p in entries:
         if moved >= limit:
             break
+        if _is_tombstoned(p.name):
+            # 用户已删除过的图又被 GPU 同步推回 output:直接清掉(NAS 回收站兜底)
+            try:
+                p.unlink()
+            except OSError:
+                pass
+            skipped += 1
+            continue
         if indexed(p.name):
             skipped += 1
             continue

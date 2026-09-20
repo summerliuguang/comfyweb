@@ -137,7 +137,9 @@ def _archive_one(filename, subfolder, img_type):
     try:
         global _index_dirty
         t0 = time.time()
-        library.place(local_path, filename, source="archive")
+        if library.place(local_path, filename, source="archive") is None:
+            local_path.unlink(missing_ok=True)   # 墓碑命中(用户已删):清本地副本
+            return
         _index_dirty = True
         if time.time() - t0 > SLOW_WRITE_SECONDS:
             _mark_penalty(f"入库 {filename} 耗时 {time.time() - t0:.0f}s")
@@ -235,7 +237,10 @@ def sync_pending():
             if not remote_ready():
                 return  # 冷却期:保留本地,下次再试
             t0 = time.time()
-            library.place(p, filename, source="sync")
+            rel = library.place(p, filename, source="sync")
+            if rel is None:
+                p.unlink(missing_ok=True)   # 墓碑命中(用户已删):本地副本一并清掉
+                continue
             _index_dirty = True
             if time.time() - t0 > SLOW_WRITE_SECONDS:
                 _mark_penalty(f"入库 {filename} 耗时 {time.time() - t0:.0f}s")
@@ -246,6 +251,18 @@ def sync_pending():
             return
     if placed or pruned:
         log.info("图片同步:入库 %d 张,清理本地旧副本 %d 张", placed, pruned)
+
+
+def remove_local(filename):
+    """清理本地缓冲里某文件的全部副本(删除图片后防 sync 重新入库)。返回清理数。"""
+    n = 0
+    for p in LOCAL_DIR.rglob(filename):
+        try:
+            p.unlink()
+            n += 1
+        except OSError:
+            pass
+    return n
 
 
 def trigger_sync():
