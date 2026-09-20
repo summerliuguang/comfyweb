@@ -266,3 +266,6 @@ body.batch-mode .gitem .fav-btn{display:none}
   gap:.6rem;padding:.7rem .8rem;background:var(--card);border-top:1px solid var(--line);
   flex-wrap:wrap;box-shadow:0 -4px 16px rgba(20,24,40,.12)}
 .batch-bar.on{display:flex}
+
+/* 长按防系统菜单/文字选中 */
+body.batch-mode .gitem, .gitem{-webkit-touch-callout:none;user-select:none}

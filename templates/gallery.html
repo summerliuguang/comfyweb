@@ -123,6 +123,38 @@ function toggleSel(card) {
 }
 
 document.getElementById('btnBatchMode').addEventListener('click', () => setBatchMode(!batchMode));
+
+/* 长按卡片 500ms 触发批量选择(移动端主要入口;桌面按住同样可用) */
+let lpTimer = 0, lpFired = false, lpStart = null, lpCard = null;
+const masonryEl = document.querySelector('.masonry');
+masonryEl.addEventListener('pointerdown', (e) => {
+  if (batchMode || lpTimer) return;
+  const card = e.target.closest('.gitem');
+  if (!card) return;
+  lpCard = card;
+  lpStart = { x: e.clientX, y: e.clientY };
+  lpFired = false;
+  lpTimer = setTimeout(() => {
+    lpTimer = 0;
+    lpFired = true;
+    setBatchMode(true);
+    if (lpCard) toggleSel(lpCard);
+    if (navigator.vibrate) navigator.vibrate(40);
+  }, 500);
+});
+['pointermove', 'pointerup', 'pointercancel'].forEach(ev =>
+  masonryEl.addEventListener(ev, (e) => {
+    if (!lpTimer) return;
+    if (ev === 'pointermove' && lpStart &&
+        Math.hypot(e.clientX - lpStart.x, e.clientY - lpStart.y) > 12) {
+      clearTimeout(lpTimer); lpTimer = 0;   // 手指移动视为滚动,取消长按
+      return;
+    }
+    if (ev !== 'pointermove') { clearTimeout(lpTimer); lpTimer = 0; }
+  }));
+masonryEl.addEventListener('contextmenu', (e) => {
+  if (batchMode || lpFired || lpTimer) { e.preventDefault(); }   // 长按不弹系统菜单
+});
 document.getElementById('btnBatchCancel').addEventListener('click', () => setBatchMode(false));
 
 async function batchAct(action, nsfw) {
@@ -139,13 +171,20 @@ async function batchAct(action, nsfw) {
     const d = await r.json();
     if (!r.ok) { window.toast && toast(d.error || '操作失败'); return; }
     if (d.failed) alert(`完成 ${d.done} 张,失败 ${d.failed} 张:\n` + (d.errors || []).join('\n'));
-    location.reload();   // 刷新后筛选/计数/过滤状态全部正确
+    // 原地更新:消失的卡片移除+重排+计数递减,浏览位置保持在刚才的地方
+    const cards = [...document.querySelectorAll('.gitem.sel')];
+    cards.forEach(c => c.remove());
+    setBatchMode(false);
+    window.__masonryRelayout && window.__masonryRelayout();
+    if (d.hidden) window.__viewTotalDelta && window.__viewTotalDelta(d.hidden);
+    window.toast && toast(`完成 ${d.done} 张${d.failed ? `,失败 ${d.failed}` : ''}`);
   } catch (e) { window.toast && toast('操作失败: ' + e.message); }
 }
 document.getElementById('btnBatchDel').addEventListener('click', () => batchAct('delete'));
 document.getElementById('btnBatchNsfw').addEventListener('click', () => batchAct('private', true));
 
 document.querySelector('.masonry').addEventListener('click', async (e) => {
+  if (lpFired) { e.preventDefault(); lpFired = false; return; }   // 长按已处理,吞掉紧随的点击
   if (batchMode) {
     const card = e.target.closest('.gitem');
     if (card) { e.preventDefault(); toggleSel(card); }
@@ -218,6 +257,11 @@ document.querySelector('.masonry').addEventListener('click', async (e) => {
     bindLoad(nodes);
     layout();
   };
+  /* 批量删除/隐藏后:卡片已被外部移除,这里只做全量重排 */
+  window.__masonryRelayout = function () {
+    items = Array.from(wrap.children);
+    layout();
+  };
 })();
 </script>
 <script>
@@ -225,7 +269,7 @@ document.querySelector('.masonry').addEventListener('click', async (e) => {
 (function () {
   const qs = {{ qs | tojson }};
   let page = {{ page }}, pages = {{ pages }};
-  const TOTAL = {{ total }};
+  let VIEW_TOTAL = {{ total }};   // 批量删除/隐藏后原地递减(原 const TOTAL)
   const sentinel = document.getElementById('sentinel');
   const info = document.getElementById('pageInfo');
   let loading = false;
@@ -262,8 +306,14 @@ document.querySelector('.masonry').addEventListener('click', async (e) => {
 
   function updateInfo() {
     if (!info) return;   // 单页结果(pages<=1)时 pageInfo 未渲染
-    info.textContent = `已加载第 ${page} / ${pages} 页 · 共 ${TOTAL} 张`;
+    info.textContent = `已加载第 ${page} / ${pages} 页 · 共 ${VIEW_TOTAL} 张`;
   }
+  window.__viewTotalDelta = function (delta) {
+    VIEW_TOTAL -= delta;
+    const tag = document.querySelector('.page-head .tag');
+    if (tag) tag.textContent = `${VIEW_TOTAL} 张`;
+    updateInfo();
+  };
 
   async function loadNext() {
     if (loading || page >= pages) return;

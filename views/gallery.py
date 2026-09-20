@@ -329,8 +329,15 @@ def api_gallery_batch():
             failed += 1
             if len(errors) < 3:
                 errors.append(f"#{rid}: {error}")
+    # hidden = 操作后从当前视图消失的张数(前端据此原地更新计数,不刷新页面)
+    if action == "delete":
+        hidden = done
+    elif action == "private" and nsfw and not private_open():
+        hidden = done
+    else:
+        hidden = 0
     return {"ok": True, "done": done, "failed": failed, "errors": errors,
-            "nsfw": nsfw if action == "private" else None}
+            "hidden": hidden}
 
 
 @bp.post("/api/library/image/<int:rowid>/nsfw")
