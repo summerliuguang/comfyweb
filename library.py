@@ -163,19 +163,41 @@ def _migrate_v1(conn, lib_prefix):
     conn.commit()
 
 
+_lib_conn = None
+
+
 def _lib_connect():
-    conn = sqlite3.connect(db.DATA_DIR / "library.db", timeout=15)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    info = list(conn.execute("PRAGMA table_info(files)"))
-    pk_cols = {r[1] for r in info if r[5]}
-    if info and "path" not in pk_cols:  # v1(path 非主键)→ v2
-        _migrate_v1(conn, library_dir().name)
-    elif not info:
-        conn.execute(_FILES_DDL)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_files_created ON files(created_at)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_files_filename ON files(filename)")
-    return conn
+    """单例连接(check_same_thread=False):所有访问都持 _lock 串行,跨线程安全。
+    WAL PRAGMA/迁移探测/DDL 只在首建时执行——此前每次调用都重跑一遍,而本函数
+    被用在逐文件循环里(storage 同步/收编/status),开销被放大成每张图一次"建连+DDL"。"""
+    global _lib_conn
+    if _lib_conn is None:
+        conn = sqlite3.connect(db.DATA_DIR / "library.db", timeout=15,
+                               check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        info = list(conn.execute("PRAGMA table_info(files)"))
+        pk_cols = {r[1] for r in info if r[5]}
+        if info and "path" not in pk_cols:  # v1(path 非主键)→ v2
+            _migrate_v1(conn, library_dir().name)
+        elif not info:
+            conn.execute(_FILES_DDL)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_files_created ON files(created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_files_filename ON files(filename)")
+        _lib_conn = conn
+    return _lib_conn
+
+
+def reset_conn():
+    """关闭并丢弃单例连接(测试隔离/库文件重建后调用;下次访问自动重开)。"""
+    global _lib_conn
+    with _lock:
+        if _lib_conn is not None:
+            try:
+                _lib_conn.close()
+            except sqlite3.Error:
+                pass
+        _lib_conn = None
 
 
 def indexed(filename):
@@ -185,40 +207,51 @@ def indexed(filename):
     return dict(row) if row else None
 
 
+def indexed_map(filenames):
+    """批量按文件名查询(同步线程整轮一次,替代逐文件单查)。"""
+    filenames = [f for f in filenames if f]
+    if not filenames:
+        return {}
+    marks = ",".join("?" * len(filenames))
+    with _lock:
+        rows = _lib_connect().execute(
+            f"SELECT rowid, * FROM files WHERE filename IN ({marks})", filenames).fetchall()
+    return {r["filename"]: dict(r) for r in rows}
+
+
 def view_neighbors(rowid, where="", args=(), window=40):
     """详情页定位:当前行 + 全库(或筛选集)内位置 + 邻图窗口 + 跨窗口接续 ID。
 
     排序与画廊网格一致(created_at DESC, rowid DESC);pos 从最新数起。
     邻图只取当前 ±window,窗口外给出 newer_rid/older_rid 供前端跳转续览。
     """
-    conn = _lib_connect()
-    cur = conn.execute("SELECT rowid, * FROM files WHERE rowid=?", (rowid,)).fetchone()
-    if not cur:
-        conn.close()
-        return None
-    key = "(created_at, rowid)"
+    with _lock:
+        conn = _lib_connect()
+        cur = conn.execute("SELECT rowid, * FROM files WHERE rowid=?", (rowid,)).fetchone()
+        if not cur:
+            return None
+        key = "(created_at, rowid)"
 
-    def wcond(op):
-        if where:
-            return f"WHERE {where} AND {key} {op} (?, ?)", (*args, cur["created_at"], rowid)
-        return f"WHERE {key} {op} (?, ?)", (cur["created_at"], rowid)
+        def wcond(op):
+            if where:
+                return f"WHERE {where} AND {key} {op} (?, ?)", (*args, cur["created_at"], rowid)
+            return f"WHERE {key} {op} (?, ?)", (cur["created_at"], rowid)
 
-    w_total, a_total = (f"WHERE {where}", args) if where else ("", ())
-    total = conn.execute(f"SELECT COUNT(*) FROM files {w_total}", a_total).fetchone()[0]
-    w_gt, a_gt = wcond(">")
-    pos = conn.execute(f"SELECT COUNT(*) FROM files {w_gt}", a_gt).fetchone()[0] + 1
-    w_le, a_le = wcond("<=")   # 当前及更新(排序靠前)
-    w_ge, a_ge = wcond(">=")   # 当前及更旧(排序靠后)
-    newer = conn.execute(
-        f"SELECT rowid, * FROM files {w_le} ORDER BY created_at DESC, rowid DESC LIMIT ?",
-        (*a_le, window + 1)).fetchall()
-    older = conn.execute(
-        f"SELECT rowid, * FROM files {w_ge} ORDER BY created_at ASC, rowid ASC LIMIT ?",
-        (*a_ge, window + 1)).fetchall()
-    conn.close()
-    newer_rid = newer[-1]["rowid"] if len(newer) > window else None
-    older_rid = older[-1]["rowid"] if len(older) > window else None
-    neighbors = [dict(r) for r in list(newer[:window]) + list(reversed(older[:window]))]
+        w_total, a_total = (f"WHERE {where}", args) if where else ("", ())
+        total = conn.execute(f"SELECT COUNT(*) FROM files {w_total}", a_total).fetchone()[0]
+        w_gt, a_gt = wcond(">")
+        pos = conn.execute(f"SELECT COUNT(*) FROM files {w_gt}", a_gt).fetchone()[0] + 1
+        w_le, a_le = wcond("<=")   # 当前及更新(排序靠前)
+        w_ge, a_ge = wcond(">=")   # 当前及更旧(排序靠后)
+        newer = conn.execute(
+            f"SELECT rowid, * FROM files {w_le} ORDER BY created_at DESC, rowid DESC LIMIT ?",
+            (*a_le, window + 1)).fetchall()
+        older = conn.execute(
+            f"SELECT rowid, * FROM files {w_ge} ORDER BY created_at ASC, rowid ASC LIMIT ?",
+            (*a_ge, window + 1)).fetchall()
+        newer_rid = newer[-1]["rowid"] if len(newer) > window else None
+        older_rid = older[-1]["rowid"] if len(older) > window else None
+        neighbors = [dict(r) for r in list(newer[:window]) + list(reversed(older[:window]))]
     return {"row": dict(cur), "pos": pos, "total": total, "neighbors": neighbors,
             "newer_rid": newer_rid, "older_rid": older_rid}
 
@@ -242,7 +275,6 @@ def _index_add(path, filename, thumb, model, category, batch, workflow,
              workflow or "", prompt or "", seed, lora or "",
              json.dumps(tags, ensure_ascii=False), size, source, created_at))
         conn.commit()
-        conn.close()
 
 
 def _index_remove(filename):
@@ -250,7 +282,6 @@ def _index_remove(filename):
         conn = _lib_connect()
         conn.execute("DELETE FROM files WHERE filename=?", (filename,))
         conn.commit()
-        conn.close()
 
 
 def find_on_nas(filename, subfolder="", img_type="output"):
@@ -294,7 +325,6 @@ def thumb_generate(row):
             conn = _lib_connect()
             conn.execute("UPDATE files SET thumb=? WHERE path=?", (str(thumb_rel), row["path"]))
             conn.commit()
-            conn.close()
         return body
     except Exception as e:
         print(f"缩略图生成失败 {row.get('filename')}: {e}")
@@ -307,7 +337,6 @@ def thumb_sweep(limit=6):
         conn = _lib_connect()
         rows = conn.execute(
             "SELECT rowid, * FROM files WHERE thumb IS NULL LIMIT ?", (limit,)).fetchall()
-        conn.close()
     done = 0
     for r in rows:
         if thumb_generate(dict(r)):
@@ -330,7 +359,6 @@ def ingest_refresh():
             like = output_dir().name + "/%"
             known = {r["path"]: (r["size"], r["created_at"]) for r in conn.execute(
                 "SELECT path, size, created_at FROM files WHERE path LIKE ?", (like,))}
-            conn.close()
         for sub in sorted(p for p in out.iterdir() if p.is_dir()):
             for f in sub.rglob("*"):
                 if not f.is_file() or f.suffix.lower() not in LIB_EXTENSIONS:
@@ -377,7 +405,6 @@ def page_query(where, args, page, per_page):
         rows = conn.execute(
             f"SELECT rowid, * {base} ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?",
             (*args, per_page, (page - 1) * per_page)).fetchall()
-        conn.close()
     return [dict(r) for r in rows], total
 
 
@@ -390,7 +417,6 @@ def filter_options():
             return [r[0] for r in conn.execute(
                 f"SELECT DISTINCT {name} FROM files WHERE {name}!='' ORDER BY 1")]
         opts = {k: col(k) for k in ("model", "workflow", "category", "batch", "lora")}
-        conn.close()
     return opts
 
 
@@ -539,7 +565,6 @@ def status():
                 (output_dir().name + "/%",)).fetchone()[0]
             nothumb = conn.execute(
                 "SELECT COUNT(*) FROM files WHERE thumb IS NULL").fetchone()[0]
-            conn.close()
     except Exception:
         pass
     try:

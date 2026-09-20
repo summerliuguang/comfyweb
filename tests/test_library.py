@@ -119,7 +119,6 @@ class TestPlaceAndCollect(unittest.TestCase):
         conn = library._lib_connect()
         n = conn.execute(
             "SELECT COUNT(*) FROM files WHERE filename='placed_001_.png'").fetchone()[0]
-        conn.close()
         self.assertEqual(n, 1)
 
     def test_collect_moves_and_dedups(self):

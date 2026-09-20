@@ -187,24 +187,48 @@ def _enqueue_missing():
         log.info("图片补拉:发现 %d 张缺归档,开始后台拉取", missing)
 
 
+_sync_force = False     # trigger_sync() 置位:绕过变化检测强制跑一轮
+_last_sig = None        # 上一轮本地缓冲内容签名 {(name, size, mtime)}
+_last_sync_run = 0.0    # 上一轮实际执行时间(无变化时也周期性推进 7 天清理)
+
+
 def sync_pending():
     """把本地有、library 没有的副本补放进去;确认 library 已有不低于本地质量
-    副本的,超龄本地文件释放(含画质升级:library 全画质原图 > 本地 webp 替身)。"""
+    副本的,超龄本地文件释放(含画质升级:library 全画质原图 > 本地 webp 替身)。
+
+    变化检测:本地缓冲无增删改时跳过整轮——此前每个 tick 都全量扫盘并逐文件
+    查库 + NAS stat(CIFS 往返),缓冲一大就是持续负载,NAS 磁盘也无法休眠。
+    无变化状态下仍每小时强制一轮,推进"超龄清理"这类与文件变化无关的事务。
+    """
+    global _index_dirty, _last_sig, _sync_force, _last_sync_run
     if not remote_ready():
         return
     now = time.time()
+    files = [p for p in LOCAL_DIR.rglob("*")
+             if p.is_file() and p.suffix != ".part"]
+    try:
+        sig = {(p.name, p.stat().st_size, int(p.stat().st_mtime)) for p in files}
+    except OSError:
+        sig = None  # 文件正在变动,按有变化处理
+    unchanged = sig == _last_sig
+    if unchanged and not _sync_force and now - _last_sync_run < 3600:
+        return
+    _last_sig = sig
+    _sync_force = False
+    _last_sync_run = now
+    # 变化轮:补入库 + 超龄清理;无变化的每小时强制轮:推进超龄清理
     placed = pruned = 0
-    for p in LOCAL_DIR.rglob("*"):
-        if not p.is_file() or p.suffix == ".part":
-            continue
+    idx = library.indexed_map(p.name for p in files)
+    for p in files:
         filename = p.name
         try:
-            row = library.indexed(filename)
+            st = p.stat()
+            row = idx.get(filename)
             if row:
                 dest = library.nas_root() / row["path"]
-                if dest.exists() and dest.stat().st_size >= p.stat().st_size:
+                if dest.exists() and dest.stat().st_size >= st.st_size:
                     # library 副本不低于本地:超龄释放(读路径自动落到 library)
-                    if now - p.stat().st_mtime > PRUNE_AFTER_DAYS * 86400:
+                    if now - st.st_mtime > PRUNE_AFTER_DAYS * 86400:
                         p.unlink()
                         pruned += 1
                     continue
@@ -212,7 +236,6 @@ def sync_pending():
                 return  # 冷却期:保留本地,下次再试
             t0 = time.time()
             library.place(p, filename, source="sync")
-            global _index_dirty
             _index_dirty = True
             if time.time() - t0 > SLOW_WRITE_SECONDS:
                 _mark_penalty(f"入库 {filename} 耗时 {time.time() - t0:.0f}s")
@@ -226,7 +249,9 @@ def sync_pending():
 
 
 def trigger_sync():
-    """立即做一轮补拉扫描 + 同步(设置页按钮/启动时)。"""
+    """立即做一轮补拉扫描 + 同步(设置页按钮/启动时);绕过变化检测强制执行。"""
+    global _sync_force
+    _sync_force = True
     _wake.set()
 
 
@@ -299,16 +324,18 @@ def start():
 
 def status():
     """设置页展示:library 配置/挂载/降级状态 + 本地缓冲与收编概况。"""
-    local_n = sum(1 for p in LOCAL_DIR.rglob("*") if p.is_file() and p.suffix != ".part")
+    files = [p for p in LOCAL_DIR.rglob("*")
+             if p.is_file() and p.suffix != ".part"]
+    local_n = len(files)
     pending = 0
-    if remote_enabled():
-        for p in LOCAL_DIR.rglob("*"):
-            if not p.is_file() or p.suffix == ".part":
-                continue
-            row = library.indexed(p.name)
+    if remote_enabled() and files:
+        idx = library.indexed_map(p.name for p in files)   # 单遍:一次批量查,循环内只做 stat
+        for p in files:
             try:
+                st = p.stat()
+                row = idx.get(p.name)
                 dest = (library.nas_root() / row["path"]) if row else None
-                if dest is None or not dest.exists() or dest.stat().st_size < p.stat().st_size:
+                if dest is None or not dest.exists() or dest.stat().st_size < st.st_size:
                     pending += 1
             except OSError:
                 pending += 1

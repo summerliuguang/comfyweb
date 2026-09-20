@@ -11,6 +11,7 @@ from flask import Blueprint, jsonify, render_template, request
 
 import db
 import library
+from views.helpers import cached
 
 bp = Blueprint("gallery", __name__)
 
@@ -93,7 +94,8 @@ def api_gallery_items():
 def page_gallery():
     where, args, cur = _gallery_filter()
     items, page, pages, total = _gallery_items(where, args, _parse_page())
-    opts = library.filter_options()
+    # 5 个 SELECT DISTINCT 全列扫描,TTL 缓存兜住首页开销;新图最迟 60s 进下拉
+    opts = cached("gallery_filters", 60, library.filter_options)
     opts = {
         "workflows": opts["workflow"],
         "models": [(m, _short(m)) for m in opts["model"]],
