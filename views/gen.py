@@ -12,7 +12,7 @@ import db
 import workflow as wfmod
 from comfy_client import ComfyError, client, reconcile_active_tasks
 
-from views.helpers import PARAM_KEYS, cached, err, image_url
+from views.helpers import PARAM_KEYS, cached, err, image_url, private_open
 
 bp = Blueprint("gen", __name__)
 
@@ -153,7 +153,8 @@ def repair_template(tpl):
 
 @bp.get("/")
 def page_generate():
-    rows = db.query("SELECT id, name FROM workflows WHERE enabled=1 ORDER BY id DESC")
+    hide = "" if private_open() else " AND nsfw=0"
+    rows = db.query(f"SELECT id, name FROM workflows WHERE enabled=1{hide} ORDER BY id DESC")
     active = db.query(
         "SELECT id FROM tasks WHERE status IN ('queued','running') ORDER BY id DESC LIMIT 20")
     return render_template("generate.html", workflows=rows,
@@ -162,7 +163,8 @@ def page_generate():
 
 @bp.get("/workflows")
 def page_workflows():
-    rows = db.query("SELECT * FROM workflows ORDER BY id DESC")
+    hide = "" if private_open() else " WHERE nsfw=0"
+    rows = db.query(f"SELECT * FROM workflows{hide} ORDER BY id DESC")
     favs = [r for r in rows if r["fav"]]
     opts = {k: sorted({r[k] for r in rows if r[k]})
             for k in ("scene", "base_model", "purpose")}
@@ -382,7 +384,7 @@ def api_workflow_create():
 @bp.get("/api/workflows/<int:wid>")
 def api_workflow_get(wid):
     row = db.query_one("SELECT * FROM workflows WHERE id=?", (wid,))
-    if not row:
+    if not row or (row["nsfw"] and not private_open()):
         return err("模板不存在", 404)
     tpl = complete_select_options(load_tpl(row))
     wfmod.sort_params(tpl["params"])
@@ -417,6 +419,9 @@ def api_workflow_update(wid):
     if "fav" in data:
         db.execute("UPDATE workflows SET fav=? WHERE id=?",
                    (1 if data.get("fav") else 0, int(wid)))
+    if "nsfw" in data:
+        db.execute("UPDATE workflows SET nsfw=? WHERE id=?",
+                   (1 if data.get("nsfw") else 0, int(wid)))
     for k in ("scene", "base_model", "purpose"):  # 列名为字面量白名单,无注入面
         if k in data:
             db.execute(f"UPDATE workflows SET {k}=? WHERE id=?",

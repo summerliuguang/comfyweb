@@ -88,6 +88,24 @@
           s.textContent = '未识别';
           row.appendChild(s);
         }
+        const nb = document.createElement('button');
+        nb.type = 'button';
+        nb.className = 'button is-small' + (f.nsfw ? ' is-danger' : ' is-light');
+        nb.textContent = f.nsfw ? '私密' : '设私密';
+        nb.addEventListener('click', async () => {
+          nb.classList.add('is-loading');
+          nb.disabled = true;
+          try {
+            const d = await apiPost('/api/local/meta-nsfw', {
+              folder: window.LOCAL_DIR, filename: f.filename, nsfw: !f.nsfw });
+            f.nsfw = d.nsfw;
+            nb.textContent = f.nsfw ? '私密' : '设私密';
+            nb.className = 'button is-small' + (f.nsfw ? ' is-danger' : ' is-light');
+          } catch (e) { alert(e.message); }
+          nb.classList.remove('is-loading');
+          nb.disabled = false;
+        });
+        row.appendChild(nb);
         list.appendChild(row);
       }
       wrap.appendChild(list);

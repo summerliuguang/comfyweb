@@ -160,6 +160,15 @@ def init_db():
     icols = {r[1] for r in db.execute("PRAGMA table_info(images)")}
     if "fav" not in icols:
         db.execute("ALTER TABLE images ADD COLUMN fav INTEGER NOT NULL DEFAULT 0")
+    # 私密标记(NSFW):工作流/提示词模板/模型元数据各自一列,过滤在视图层按开关拼接
+    if "nsfw" not in cols:
+        db.execute("ALTER TABLE workflows ADD COLUMN nsfw INTEGER NOT NULL DEFAULT 0")
+    mcols = {r[1] for r in db.execute("PRAGMA table_info(model_meta)")}
+    if "nsfw" not in mcols:
+        db.execute("ALTER TABLE model_meta ADD COLUMN nsfw INTEGER NOT NULL DEFAULT 0")
+    bcols = {r[1] for r in db.execute("PRAGMA table_info(batch_templates)")}
+    if "nsfw" not in bcols:
+        db.execute("ALTER TABLE batch_templates ADD COLUMN nsfw INTEGER NOT NULL DEFAULT 0")
     _backfill_task_models(db)
     # filename 仅为迁移保留,统一按行 id 命名
     db.execute("UPDATE workflows SET filename='wf_'||id||'.json' WHERE filename=''")

@@ -16,6 +16,7 @@
       <div class="wf-acts">
         <a class="button is-small is-link is-light" href="/?template={{ w.id }}">去生成</a>
         <button class="button is-small w-fav" data-id="{{ w.id }}" data-fav="1">已收藏</button>
+        <button class="button is-small {{ 'is-danger' if w.nsfw }} w-nsfw" data-id="{{ w.id }}" data-nsfw="{{ w.nsfw }}">{{ '私密' if w.nsfw else '设私密' }}</button>
         <a class="button is-small" href="/workflows/{{ w.id }}/edit">编辑</a>
       </div>
     </div>
@@ -67,6 +68,7 @@
           <div class="buttons" style="justify-content:flex-end;margin:0">
             <a class="button is-small is-link" href="/?template={{ w.id }}">去生成</a>
             <button class="button is-small {{ 'is-link' if w.fav }} w-fav" data-id="{{ w.id }}" data-fav="{{ w.fav }}">{{ '已收藏' if w.fav else '收藏' }}</button>
+            <button class="button is-small {{ 'is-danger' if w.nsfw }} w-nsfw" data-id="{{ w.id }}" data-nsfw="{{ w.nsfw }}" title="私密:关闭私密模式时此工作流隐藏,新图归入 nsfw/ 私密区">{{ '私密' if w.nsfw else '设私密' }}</button>
             <a class="button is-small" href="/workflows/{{ w.id }}/edit">编辑</a>
             <button class="button is-small is-danger is-light w-del" data-id="{{ w.id }}" data-name="{{ w.name }}">删除</button>
           </div>
@@ -268,6 +270,23 @@
   });
 
   /* 收藏/取消收藏:更新按钮态后刷新页面,收藏组与计数随之同步 */
+  document.querySelectorAll('.w-nsfw').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      btn.classList.add('is-loading');
+      btn.disabled = true;
+      const r = await fetch('/api/workflows/' + btn.dataset.id, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nsfw: btn.dataset.nsfw !== '1' })
+      });
+      if (r.ok) location.reload();
+      else {
+        const d = await r.json().catch(() => ({}));
+        alert(d.error || r.status);
+        btn.classList.remove('is-loading');
+        btn.disabled = false;
+      }
+    });
+  });
   document.querySelectorAll('.w-fav').forEach(btn => {
     btn.addEventListener('click', async () => {
       btn.classList.add('is-loading');

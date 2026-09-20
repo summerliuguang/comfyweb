@@ -24,9 +24,26 @@
     let d;
     try { d = await toJson(await fetch('/api/batch/templates')); } catch (e) { return; }
     const sel = $('tplSelect');
+    window._batchTplCache = d.templates;
     sel.innerHTML = '<option value="">— 选择已保存模板 —</option>' +
-      d.templates.map(t => `<option value="${esc(t.name)}">${esc(t.name)}</option>`).join('');
+      d.templates.map(t => `<option value="${esc(t.name)}">${esc(t.name)}${t.nsfw ? ' 🔒' : ''}</option>`).join('');
+    const nb = $('btnTplNsfw');
+    if (nb) nb.textContent = '设私密';
   }
+
+  $('btnTplNsfw').addEventListener('click', async () => {
+    const name = $('tplSelect').value;
+    if (!name) { alert('先选择模板'); return; }
+    const t = (window._batchTplCache || []).find(x => x.name === name);
+    if (!t) return;
+    try {
+      const d = await toJson(await fetch('/api/batch/templates/nsfw', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, nsfw: !t.nsfw }) }));
+      t.nsfw = d.nsfw;
+      loadTemplates();
+    } catch (e) { alert(e.message); }
+  });
 
   $('tplSelect').addEventListener('change', () => {
     const name = $('tplSelect').value;

@@ -127,6 +127,23 @@ def classify(filename, meta):
         prefix = _prefix_of(filename)
         parent = Path(UNCLASSIFIED) / prefix
         tags = [UNCLASSIFIED, prefix]
+    """按归属规则给出 (相对 library 根的父目录, tags 列表)。
+
+    meta: {model, category, batch, workflow, prompt, seed, created_at} 或 None(无任务归属)。
+    """
+    if meta and (meta.get("model") or meta.get("batch") or meta.get("workflow")):
+        day = str(meta.get("created_at") or "")[:10] or date.today().isoformat()
+        theme = _safe_name(meta.get("batch") or meta.get("workflow") or "生成")
+        parent = Path(_model_stem(meta.get("model"))) / f"{day}_{theme}"
+        tags = [t for t in (_model_stem(meta.get("model")), meta.get("category"),
+                            meta.get("batch"), meta.get("workflow")) if t]
+    else:
+        prefix = _prefix_of(filename)
+        parent = Path(UNCLASSIFIED) / prefix
+        tags = [UNCLASSIFIED, prefix]
+
+    if meta and meta.get("nsfw"):
+        parent = f"nsfw/{parent}"   # 私密内容独立子树(同分片规则)
     return parent, tags
 
 
@@ -190,6 +207,8 @@ def _lib_connect():
         cols = {r[1] for r in conn.execute("PRAGMA table_info(files)")}
         if "params_json" not in cols:
             conn.execute("ALTER TABLE files ADD COLUMN params_json TEXT")
+        if "nsfw" not in cols:
+            conn.execute("ALTER TABLE files ADD COLUMN nsfw INTEGER NOT NULL DEFAULT 0")
         conn.execute("UPDATE files SET seed=NULL WHERE seed=''")  # 旧写入把空串塞进过 INTEGER 列
         conn.commit()
         conn.execute("CREATE INDEX IF NOT EXISTS idx_files_created ON files(created_at)")
@@ -531,6 +550,66 @@ def delete_image(rowid):
     return True, ""
 
 
+def mark_private(rowid, nsfw):
+    """单张图片私密化/取消:文件与缩略图在 nsfw/ 子树与普通树之间移动,索引同步。
+    返回 (ok, error)。取消时按 classify 重算普通区位置(未分类归未分类)。"""
+    row = get(rowid)
+    if not row:
+        return False, "图片不存在"
+    old_rel = Path(row["path"])                    # 相对 nas_root,如 library/<模型>/.../f.png
+    lib_name = Path(library_dir().name)
+    try:
+        inner = old_rel.relative_to(lib_name)      # <模型>/.../f.png
+    except ValueError:
+        return False, "索引路径异常"
+    in_nsfw = bool(row["nsfw"])
+    if nsfw == in_nsfw:
+        return True, ""
+    try:
+        if nsfw:
+            new_inner = Path("nsfw") / inner
+        else:
+            new_inner = Path(str(inner).split("/", 1)[1]
+                             if str(inner).startswith("nsfw/") else str(inner))
+            meta = lookup_task_meta(row["filename"])
+            parent, tags = classify(row["filename"], meta)   # 取消后重算归属
+            new_inner = Path(parent) / inner.name
+        src_file = nas_root() / old_rel
+        dest_dir = _shard_dir(library_dir() / new_inner.parent)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / row["filename"]
+        if dest.exists():
+            if dest.stat().st_size == src_file.stat().st_size:
+                src_file.unlink()
+            else:
+                return False, "目标位置存在同名不同内容的图片"
+        else:
+            shutil.move(str(src_file), str(dest))
+        # 路径以 dest_dir 实际位置为准(_shard_dir 满员时会开分片改目录名)
+        new_rel = Path(lib_name) / dest_dir.relative_to(library_dir()) / row["filename"]
+        old_thumb = (nas_root() / row["thumb"]) if row["thumb"] else None
+        new_thumb_rel = Path(lib_name) / "thumbs" / dest_dir.relative_to(library_dir()) / (row["filename"] + ".webp")
+        if old_thumb and old_thumb.exists():
+            nt = nas_root() / new_thumb_rel
+            nt.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(old_thumb), str(nt))
+        with _lock:
+            conn = _lib_connect()
+            conn.execute("UPDATE files SET path=?, thumb=?, nsfw=? WHERE rowid=?",
+                         (str(new_rel),
+                          str(new_thumb_rel) if old_thumb and old_thumb.exists() else row["thumb"],
+                          1 if nsfw else 0, rowid))
+            conn.commit()
+    except OSError as e:
+        return False, f"移动失败(NAS 不可用?): {e.__class__.__name__}"
+    try:
+        import storage
+        storage.note_dirty()
+    except Exception:
+        pass
+    return True, ""
+
+
 # ---------- 全库摄取(output/ 手工子目录原地索引,不移动文件) ----------
 
 def ingest_refresh():
@@ -602,9 +681,11 @@ def filter_options():
     with _lock:
         conn = _lib_connect()
 
+        hide = "" if (db.get_setting("private_enabled") or "") == "1" else " AND nsfw=0"
+
         def col(name):
             return [r[0] for r in conn.execute(
-                f"SELECT DISTINCT {name} FROM files WHERE {name}!='' ORDER BY 1")]
+                f"SELECT DISTINCT {name} FROM files WHERE {name}!=''{hide} ORDER BY 1")]
         opts = {k: col(k) for k in ("model", "workflow", "category", "batch", "lora")}
     return opts
 
@@ -613,7 +694,7 @@ def lookup_task_meta(filename):
     """按文件名在 comfyweb 库里找最近一条任务归属(images→tasks)。"""
     row = db.query_one(
         "SELECT t.model, t.category, t.batch, t.workflow_name, t.prompt_text, "
-        "t.seed, t.lora, t.created_at FROM images i JOIN tasks t ON t.id=i.task_id "
+        "t.seed, t.lora, t.created_at, t.workflow_id FROM images i JOIN tasks t ON t.id=i.task_id "
         "WHERE i.filename=? AND i.type='output' ORDER BY i.id DESC LIMIT 1",
         (filename,))
     if not row:
@@ -621,6 +702,9 @@ def lookup_task_meta(filename):
     m = dict(row)
     m["workflow"] = m.pop("workflow_name", "") or ""
     m["prompt"] = m.pop("prompt_text", "") or ""
+    # 任务的工作流被标私密 → 图归私密区(归档路由)
+    m["nsfw"] = bool(db.query_one(
+        "SELECT 1 FROM workflows WHERE id=? AND nsfw=1", (m.pop("workflow_id"),)))
     return m
 
 

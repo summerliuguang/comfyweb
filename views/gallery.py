@@ -11,7 +11,7 @@ from flask import Blueprint, jsonify, render_template, request
 
 import db
 import library
-from views.helpers import cached
+from views.helpers import cached, private_open
 
 bp = Blueprint("gallery", __name__)
 
@@ -42,6 +42,8 @@ def _gallery_filter():
         conds.append("created_at >= datetime('now','localtime',?)")
         args.append(span)
         cur["range"] = rng
+    if not private_open():
+        conds.append("nsfw=0")   # 私密模式关闭:过滤 NSFW 内容
     where = (" AND ".join(conds)) if conds else ""
     return where, args, cur
 
@@ -159,6 +161,7 @@ def _build_neighbor_items(rows, extra_for_tmap=()):
             url, dl = f"/libmedia/{rid}", f"/libmedia/{rid}?dl=1"
         items.append({
             "rid": rid, "id": (t or {}).get("id"), "task": bool(t),
+            "nsfw": bool(r["nsfw"]),
             "w": (t or {}).get("workflow_id"),
             "url": url, "dl": dl, "thumb": f"/libthumb/{rid}",
             "prompt": (t or {}).get("prompt_text") or f"未分类 · {r['filename']}",
@@ -203,7 +206,7 @@ def page_gallery_view(rowid):
     """
     where, args, _cur = _gallery_filter()
     ctx = library.view_neighbors(rowid, where, args)
-    if not ctx:
+    if not ctx or (ctx["row"]["nsfw"] and not private_open()):
         return "图片不存在(可能已被删除)", 404
 
     from views.helpers import image_url
@@ -300,6 +303,16 @@ def api_gallery_fav(img_id):
     return {"ok": True, "fav": bool(fav)}
 
 
+@bp.post("/api/library/image/<int:rowid>/nsfw")
+def api_library_image_nsfw(rowid):
+    """单张图片标私密/取消:移入或移出 nsfw/ 子树(文件+缩略图+索引同步)。"""
+    d = request.get_json(silent=True) or {}
+    ok, error = library.mark_private(rowid, bool(d.get("nsfw")))
+    if not ok:
+        return jsonify({"error": error}), (404 if error == "图片不存在" else 502)
+    return {"ok": True, "nsfw": bool(d.get("nsfw"))}
+
+
 @bp.get("/favorites")
 def page_favorites():
     """收藏页:与画廊同款瀑布流,只看收藏图片(任务图)。"""
@@ -316,8 +329,15 @@ def page_favorites():
         "FROM images i JOIN tasks t ON t.id=i.task_id WHERE i.fav=1 "
         "ORDER BY i.id DESC LIMIT ? OFFSET ?",
         (PAGE_SIZE, (page - 1) * PAGE_SIZE))
+    hide = set()
+    if not private_open():
+        idx = library.indexed_map([r["filename"] for r in rows])
+        hide = {r["filename"] for r in rows
+                if (idx.get(r["filename"]) or {}).get("nsfw")}
     items = []
     for r in rows:
+        if r["filename"] in hide:
+            continue
         it = dict(r)
         it["thumb"] = image_url(r["filename"], r["subfolder"], r["type"], preview="webp;jpeg;70")
         items.append(it)

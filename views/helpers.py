@@ -22,6 +22,11 @@ FEATURE_FLAGS = {"gen": "ENABLE_GEN", "gallery": "ENABLE_GALLERY",
                  "batch": "ENABLE_BATCH"}
 TOGGLE_FEATURES = tuple(FEATURE_FLAGS)
 
+def private_open():
+    """私密模式是否开启(设置页输密码开启;开启后 NSFW 内容可见)。"""
+    return (db.get_setting("private_enabled") or "") == "1"
+
+
 _feat_cache = {}          # name -> (expires_at, value);每请求最多 6 次开关查询
 FEAT_CACHE_TTL = 3.0
 

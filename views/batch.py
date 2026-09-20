@@ -96,7 +96,19 @@ def api_batch_stop():
 
 @bp.get("/api/batch/templates")
 def api_batch_templates():
-    return {"templates": batchgen.templates_all()}
+    from views.helpers import private_open
+    return {"templates": batchgen.templates_all(include_private=private_open())}
+
+
+@bp.post("/api/batch/templates/nsfw")
+def api_batch_template_nsfw():
+    d = request.get_json(silent=True) or {}
+    name = (d.get("name") or "").strip()
+    if not name:
+        return err("模板名为空")
+    db.execute("UPDATE batch_templates SET nsfw=? WHERE name=?",
+               (1 if d.get("nsfw") else 0, name))
+    return {"ok": True, "nsfw": bool(d.get("nsfw"))}
 
 
 @bp.post("/api/batch/templates")

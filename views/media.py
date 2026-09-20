@@ -131,7 +131,7 @@ def lib_thumb(rowid):
     """整理库缩略图:本地缓存 → NAS thumbs → 现场生成(Pillow)并回填。"""
     import library
     row = library.get(rowid)
-    if not row:
+    if not row or (row["nsfw"] and not private_open()):
         return err("图片不存在", 404)
     ck = "libthumb:" + row["path"]
     cached_path, cached_ct = img_cache_get(ck)
@@ -167,8 +167,9 @@ def lib_thumb(rowid):
 def lib_media(rowid):
     """整理库原图(查看/下载)。"""
     import library
+    from views.helpers import private_open
     row = library.get(rowid)
-    if not row:
+    if not row or (row["nsfw"] and not private_open()):
         return err("图片不存在", 404)
     try:
         body = (library.nas_root() / row["path"]).read_bytes()

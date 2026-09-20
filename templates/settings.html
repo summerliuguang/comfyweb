@@ -99,6 +99,23 @@
 </div>
 
 <div class="panel">
+  <h2 class="title is-5">私密内容(NSFW)</h2>
+  <p class="hint" style="margin-bottom:.6rem">标记为私密的模型/LoRA/工作流/提示词模板与图片,只有在私密模式开启后可见;图片会移入整理库的 nsfw/ 子树单独归档。</p>
+  <div class="field">
+    <label class="label">私密密码</label>
+    <input class="input" id="pwOld" type="password" placeholder="旧密码(已设置过时必填)" style="margin-bottom:.4rem" autocomplete="new-password">
+    <input class="input" id="pwNew" type="password" placeholder="设置新密码(至少 4 位)" autocomplete="new-password">
+  </div>
+  <div class="buttons">
+    <button class="button is-light is-small" id="btnPwSave">保存密码</button>
+    <button class="button is-link is-small" id="btnPrivateOn">开启私密模式</button>
+    <button class="button is-light is-small" id="btnPrivateOff">关闭(隐藏私密内容)</button>
+    <span class="status" id="privateStatus"></span>
+  </div>
+  <p class="task-err" id="privateError" hidden></p>
+</div>
+
+<div class="panel">
   <h2 class="title is-5">队列</h2>
   <div class="buttons">
     <button class="button is-small" id="btnQueueRefresh">刷新</button>
@@ -139,6 +156,49 @@
     if (!r.ok) throw new Error(d.error || r.status);
     return d;
   }
+
+  /* ---------- 私密内容 ---------- */
+  async function loadPrivate() {
+    try {
+      const d = await api('/api/private/status');
+      $('privateStatus').textContent = d.configured
+        ? (d.enabled ? '已开启(私密内容可见)' : '已关闭(私密内容隐藏)')
+        : '未设置密码';
+      $('privateStatus').classList.toggle('ok', !!(d.configured && d.enabled));
+      $('pwOld').hidden = !d.configured;   // 未设置过时不显示旧密码框
+      if (!d.configured) $('pwOld').value = '';
+    } catch (e) { $('privateStatus').textContent = '状态获取失败'; }
+  }
+  function privateErr(msg) {
+    $('privateError').textContent = msg;
+    $('privateError').hidden = !msg;
+    if (msg) setTimeout(() => { $('privateError').hidden = true; }, 3000);
+  }
+  $('btnPwSave').addEventListener('click', async () => {
+    const password = $('pwNew').value.trim();
+    if (password.length < 4) { privateErr('密码至少 4 位'); return; }
+    try {
+      await api('/api/private/setup', { method: 'POST',
+        body: JSON.stringify({ password, old_password: $('pwOld').value.trim() }) });
+      $('pwNew').value = ''; $('pwOld').value = '';
+      privateErr('');
+      loadPrivate();
+    } catch (e) { privateErr(e.message); }
+  });
+  $('btnPrivateOn').addEventListener('click', async () => {
+    const password = $('pwOld').value.trim() || $('pwNew').value.trim();
+    try {
+      await api('/api/private/unlock', { method: 'POST',
+        body: JSON.stringify({ password }) });
+      privateErr('');
+      loadPrivate();
+    } catch (e) { privateErr(e.message); }
+  });
+  $('btnPrivateOff').addEventListener('click', async () => {
+    try { await api('/api/private/lock', { method: 'POST' }); loadPrivate(); }
+    catch (e) { privateErr(e.message); }
+  });
+  loadPrivate();
 
   $('btnTest').addEventListener('click', async () => {
     $('testError').hidden = true;

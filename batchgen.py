@@ -198,9 +198,10 @@ def refine(body, llm_chat, model=None):
 
 # ---------- 提示词模板 CRUD ----------
 
-def templates_all():
+def templates_all(include_private=False):
+    hide = "" if include_private else " WHERE nsfw=0"
     return [dict(r) for r in db.query(
-        "SELECT name, positive, negative FROM batch_templates ORDER BY updated_at DESC")]
+        f"SELECT name, positive, negative, nsfw FROM batch_templates{hide} ORDER BY updated_at DESC")]
 
 
 def template_save(d):

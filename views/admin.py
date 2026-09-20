@@ -1,4 +1,7 @@
 """设置页、ComfyUI 状态、队列管理、主机监控与健康检查。"""
+import hashlib
+import time
+
 from flask import Blueprint, render_template, request
 
 import db
@@ -176,6 +179,72 @@ def api_features_set():
     db.set_setting("enable_" + name, "1" if enabled else "0")
     feature_cache_invalidate()   # 绕过 3s 缓存,开关即时生效
     return {"ok": True, "feature": name, "enabled": enabled}
+
+
+# ---------- 私密内容(NSFW)密码与开关 ----------
+
+_PW_ITER = 120000
+_pw_fail = {"n": 0, "until": 0.0}   # 简单防爆破:5 次失败锁 60 秒(内网+basic auth 之上再加一层)
+
+
+def _pw_hash(password, salt):
+    return hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), _PW_ITER).hex()
+
+
+@bp.get("/api/private/status")
+def api_private_status():
+    return {"configured": bool(db.get_setting("private_pw")),
+            "enabled": (db.get_setting("private_enabled") or "") == "1"}
+
+
+@bp.post("/api/private/setup")
+def api_private_setup():
+    """首次设置密码;已设置时需验证旧密码才能改。"""
+    import secrets
+    d = request.get_json(silent=True) or {}
+    password = (d.get("password") or "").strip()
+    if len(password) < 4:
+        return err("密码至少 4 位")
+    old_hash = db.get_setting("private_pw")
+    if old_hash:
+        if _pw_fail["n"] >= 5 and time.time() < _pw_fail["until"]:
+            return err("失败次数过多,请 1 分钟后再试")
+        old = (d.get("old_password") or "").strip()
+        salt, _, want = old_hash.partition("$")
+        if _pw_hash(old, salt) != want:
+            _pw_fail["n"] += 1
+            _pw_fail["until"] = time.time() + 60
+            return err("旧密码不对")
+    salt = secrets.token_hex(16)
+    db.set_setting("private_pw", f"{salt}${_pw_hash(password, salt)}")
+    _pw_fail.update(n=0, until=0.0)
+    return {"ok": True}
+
+
+@bp.post("/api/private/unlock")
+def api_private_unlock():
+    d = request.get_json(silent=True) or {}
+    password = (d.get("password") or "").strip()
+    saved = db.get_setting("private_pw")
+    if not saved:
+        return err("尚未设置密码,请先在下方设置")
+    if _pw_fail["n"] >= 5 and time.time() < _pw_fail["until"]:
+        return err("失败次数过多,请 1 分钟后再试")
+    salt, _, want = saved.partition("$")
+    if _pw_hash(password, salt) != want:
+        _pw_fail["n"] += 1
+        _pw_fail["until"] = time.time() + 60
+        return err("密码不对")
+    _pw_fail.update(n=0, until=0.0)
+    db.set_setting("private_enabled", "1")
+    return {"ok": True, "enabled": True}
+
+
+@bp.post("/api/private/lock")
+def api_private_lock():
+    """上锁(隐藏私密内容)免密——关闭只是隐藏,不构成泄露。"""
+    db.set_setting("private_enabled", "0")
+    return {"ok": True, "enabled": False}
 
 
 @bp.get("/api/storage")

@@ -72,11 +72,16 @@ def api_local_models():
     except ComfyError as e:
         return err(e, 502)
     metas = {r["filename"]: r for r in db.query("SELECT * FROM model_meta WHERE folder=?", (folder,))}
+    from views.helpers import private_open
+    open_ = private_open()
     out = []
     for f in sorted(str(f) for f in files):
         m = metas.get(f)
+        if m and m["nsfw"] and not open_:
+            continue   # 私密模式关闭:隐藏标记为私密的模型/LoRA
         out.append({
             "filename": f,
+            "nsfw": bool(m and m["nsfw"]),
             "civ_id": m["civ_id"] if m else None,
             "civ_name": m["civ_name"] if m else "",
             "base_model": m["base_model"] if m else "",
@@ -117,6 +122,23 @@ def identify_local_bg(folder, ctype):
     finally:
         with _identify_lock:
             _identify_threads.pop(folder, None)
+
+
+@bp.post("/api/local/meta-nsfw")
+def api_local_meta_nsfw():
+    """标记/取消模型或 LoRA 的私密(无识别记录的也可标记)。"""
+    d = request.get_json(silent=True) or {}
+    folder, filename = d.get("folder") or "", d.get("filename") or ""
+    if folder not in LOCAL_MODEL_DIRS or not filename:
+        return err("参数无效")
+    nsfw = 1 if d.get("nsfw") else 0
+    if db.query_one("SELECT 1 FROM model_meta WHERE folder=? AND filename=?", (folder, filename)):
+        db.execute("UPDATE model_meta SET nsfw=? WHERE folder=? AND filename=?",
+                   (nsfw, folder, filename))
+    else:
+        db.execute("INSERT INTO model_meta(folder, filename, nsfw) VALUES(?,?,?)",
+                   (folder, filename, nsfw))
+    return {"ok": True, "nsfw": bool(nsfw)}
 
 
 @bp.post("/api/local/identify")

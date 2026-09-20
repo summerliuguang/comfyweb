@@ -136,6 +136,7 @@
           rows2.map(([k, v]) => `<tr><td>${k}</td><td class="val">${v}</td></tr>`).join('') +
           '</table><div class="buttons" style="margin-top:.9rem">' +
           `<a class="button is-link is-small" href="${it.dl}" download>下载原图</a>` +
+          '<button class="button is-warning is-light is-small" id="btnNsfw">' + (it.nsfw ? '取消私密' : '设为私密') + '</button>' +
           '<button class="button is-danger is-light is-small" id="btnDelete">删除图片</button>' +
           '</div>';
         // 已解析出参数的才缓存;还没扫到的下次展开重拉(后台 sweep 很快补齐)
@@ -165,6 +166,7 @@
           rows.map(([k, v]) => `<tr><td>${k}</td><td class="val">${v}</td></tr>`).join('') +
           '</table><div class="buttons" style="margin-top:.9rem">' +
           `<a class="button is-link is-small" href="${dl}" download>下载原图</a>${again}` +
+          '<button class="button is-warning is-light is-small" id="btnNsfw">' + (it.nsfw ? '取消私密' : '设为私密') + '</button>' +
           '<button class="button is-danger is-light is-small" id="btnDelete">删除图片</button>' +
           '</div>';
       }
@@ -175,6 +177,22 @@
 
   /* sheet 内按钮用事件委托(内容随图片切换重建) */
   sheetBody.addEventListener('click', async (e) => {
+    if (e.target.id === 'btnNsfw') {
+      const it = NEIGHBORS[cur];
+      if (!it) return;
+      try {
+        const r = await fetch(`/api/library/image/${it.rid}/nsfw`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ nsfw: !it.nsfw }) });
+        const d = await r.json();
+        if (!r.ok) { toast(d.error || '操作失败'); return; }
+        it.nsfw = d.nsfw;
+        delete paramsCache[it.rid];
+        toast(d.nsfw ? '已标为私密(私密模式关闭时隐藏)' : '已取消私密');
+        renderSheetBody(it);
+      } catch (e) { toast('操作失败: ' + e.message); }
+      return;
+    }
     if (e.target.id !== 'btnDelete') return;
     const curIt = NEIGHBORS[cur];
     if (!curIt) return;

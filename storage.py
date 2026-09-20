@@ -265,6 +265,13 @@ def remove_local(filename):
     return n
 
 
+def note_dirty():
+    """索引有变更(视图层直接改库后调用):置脏标并唤醒线程按节流推送快照。"""
+    global _index_dirty
+    _index_dirty = True
+    _wake.set()
+
+
 def trigger_sync():
     """立即做一轮补拉扫描 + 同步(设置页按钮/启动时);绕过变化检测强制执行。"""
     global _sync_force
