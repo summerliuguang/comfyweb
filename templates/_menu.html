@@ -58,6 +58,7 @@
       <button type="button" data-t="dark">夜间</button>
     </div>
   </aside>
+  <div class="status" id="connStateD" style="margin-top:1.1rem">ComfyUI</div>
   <div class="foot">ComfyWeb<br>家庭内网专用</div>
 </aside>
 <script>
@@ -66,6 +67,9 @@
   var drawer = document.querySelector('.mnav-drawer');
   function setOpen(open) { document.body.classList.toggle('mnav-open', open); }
   document.querySelector('.topbar-icon').addEventListener('click', function () { setOpen(true); });
+  // 顶栏连接圆点:手机端唯一状态入口,点它滑出抽屉(内有状态行与详细原因)
+  var dot = document.getElementById('connDotM');
+  if (dot) dot.addEventListener('click', function () { setOpen(true); });
   backdrop.addEventListener('click', function () { setOpen(false); });
   drawer.querySelector('.mnav-close').addEventListener('click', function () { setOpen(false); });
   drawer.querySelectorAll('.menu-list a').forEach(function (a) {
@@ -104,13 +108,16 @@
       d.classList.toggle('bad', !ok);
       d.title = tip;
     }
-    var s = document.getElementById('connStateS');
-    if (s) {
-      s.classList.toggle('ok', ok);
-      s.classList.toggle('bad', !ok);
-      s.textContent = ok ? 'ComfyUI 已连接' : 'ComfyUI 未连接';
-      s.title = tip;
-    }
+    // 侧栏(桌面)与抽屉(手机)状态行;手机端圆点无 hover,点它打开抽屉看原因
+    ['connStateS', 'connStateD'].forEach(function (id) {
+      var s = document.getElementById(id);
+      if (s) {
+        s.classList.toggle('ok', ok);
+        s.classList.toggle('bad', !ok);
+        s.textContent = ok ? 'ComfyUI 已连接' : 'ComfyUI 未连接';
+        s.title = tip;
+      }
+    });
   }
   function pollConn() {
     fetch('/api/status').then(function (r) { return r.json(); }).then(function (d) {

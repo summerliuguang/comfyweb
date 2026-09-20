@@ -51,13 +51,17 @@
     formArea.querySelectorAll('textarea').forEach(t => comfyAutosizeFit(t));
   }
 
+  let tplSeq = 0;   // 快速切换模板时丢弃过期响应,防止旧模板覆盖表单
   async function loadTemplate() {
+    const seq = ++tplSeq;
     formArea.innerHTML = '';
     submitRow.hidden = true;
     const wid = wfSelect.value;
     if (!wid) return;
     try {
-      tpl = await toJson(await fetch('/api/workflows/' + numId(wid)));
+      const data = await toJson(await fetch('/api/workflows/' + numId(wid)));
+      if (seq !== tplSeq) return;
+      tpl = data;
       renderForm(formArea, tpl);
       const draft = localStorage.getItem(draftKey(tpl.id));
       if (draft) {
@@ -72,6 +76,7 @@
       localStorage.setItem('comfyweb.lastwf', String(tpl.id));
       loadPromptChips();
     } catch (e) {
+      if (seq !== tplSeq) return;
       formArea.innerHTML = `<p class="task-err">模板加载失败: ${esc(e.message)}</p>`;
     }
   }
@@ -130,6 +135,7 @@
       values[el.dataset.pname] = controlValue(el);
     }
     btn.classList.add('is-loading');
+    btn.disabled = true;   // 防连点:双击=两批任务双倍 GPU
     try {
       const res = await toJson(await fetch('/api/generate', {
         method: 'POST',
@@ -156,6 +162,7 @@
       errBox.hidden = false;
     } finally {
       btn.classList.remove('is-loading');
+      btn.disabled = false;
     }
   });
 

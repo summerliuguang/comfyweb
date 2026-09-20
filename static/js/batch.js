@@ -213,13 +213,19 @@
     }
   });
 
-  $('btnClear').addEventListener('click', () => { tasks = []; renderTasks(); });
+  $('btnClear').addEventListener('click', () => {
+    if (tasks.length && !confirm(`清空全部 ${tasks.length} 个任务?`)) return;
+    tasks = []; renderTasks();
+  });
 
   /* ---------- 开始生成 + 进度轮询 ---------- */
 
   $('btnStart').addEventListener('click', async () => {
     const errBox = $('startError');
     errBox.hidden = true;
+    const btn = $('btnStart');
+    btn.classList.add('is-loading');
+    btn.disabled = true;   // 防连点:重复提交会开两批
     const payload = tasks.map(t => ({
       name: t.name, pipeline: t.pipeline, w: t.w, h: t.h,
       pos_prompt: t.pos_prompt || '', prompt: t.prompt, neg: t.neg,
@@ -238,10 +244,12 @@
       if (!pollTimer) pollTimer = setInterval(pollStatus, 2000);
       $('progPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
     } catch (e) { errBox.textContent = e.message; errBox.hidden = false; }
+    finally { btn.classList.remove('is-loading'); btn.disabled = false; }
   });
 
   $('btnStop').addEventListener('click', async () => {
-    try { await toJson(await fetch('/api/batch/stop', { method: 'POST' })); } catch (e) {}
+    try { await toJson(await fetch('/api/batch/stop', { method: 'POST' })); }
+    catch (e) { window.toast && toast('停止失败: ' + e.message); }
   });
 
   async function pollStatus() {

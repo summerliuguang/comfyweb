@@ -50,6 +50,21 @@ document.addEventListener('error', function (e) {
   }
 }, true);
 
+/* 全局轻提示:收藏失败/复制失败等瞬时反馈,1.8s 自动消失 */
+window.toast = function (msg) {
+  let el = document.getElementById('gToast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'gToast';
+    el.className = 'g-toast';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.remove('show'), 1800);
+};
+
 /* 文本域随内容增高(提示词等),不用内部滚动条。
    程序化回填值后(generate.js 的草稿/再次生成)手动调 comfyAutosizeFit 重算 */
 function comfyAutosizeFit(t) {

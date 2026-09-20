@@ -92,12 +92,14 @@ document.querySelector('.masonry').addEventListener('click', async (e) => {
   const btn = e.target.closest('.fav-btn');
   if (!btn) return;
   e.preventDefault();
-  const r = await fetch(`/api/gallery/image/${btn.dataset.fav}/fav`, { method: 'POST' });
-  if (!r.ok) return;
-  const d = await r.json();
-  btn.classList.toggle('on', d.fav);
-  btn.innerHTML = d.fav ? FAV_ON : FAV_OFF;
-  btn.title = d.fav ? '取消收藏' : '收藏';
+  try {
+    const r = await fetch(`/api/gallery/image/${btn.dataset.fav}/fav`, { method: 'POST' });
+    if (!r.ok) { window.toast && toast('收藏失败'); return; }
+    const d = await r.json();
+    btn.classList.toggle('on', d.fav);
+    btn.innerHTML = d.fav ? FAV_ON : FAV_OFF;
+    btn.title = d.fav ? '取消收藏' : '收藏';
+  } catch (e) { window.toast && toast('收藏失败: ' + e.message); }
 });
 </script>
 <script>

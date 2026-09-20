@@ -330,7 +330,8 @@
         b.textContent = w;
         b.title = '点击复制';
         b.addEventListener('click', () => {
-          navigator.clipboard.writeText(w).then(() => { b.textContent = '已复制'; setTimeout(() => (b.textContent = w), 1500); });
+          navigator.clipboard.writeText(w).then(() => { b.textContent = '已复制'; setTimeout(() => (b.textContent = w), 1500); })
+            .catch(() => { window.toast && toast('复制失败(浏览器未授权剪贴板)'); });
         });
         chips.appendChild(b);
       }

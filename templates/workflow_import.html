@@ -146,6 +146,9 @@
 
   $('btnSave').addEventListener('click', async () => {
     $('saveError').hidden = true;
+    const btn = $('btnSave');
+    btn.classList.add('is-loading');
+    btn.disabled = true;   // 创建型操作,双击会建两个同名模板
     const params = collectParams($('paramRows'));
     try {
       const res = await fetch('/api/workflows', {
@@ -169,6 +172,9 @@
         $('saveError').textContent = e.message;
       }
       $('saveError').hidden = false;
+    } finally {
+      btn.classList.remove('is-loading');
+      btn.disabled = false;
     }
   });
 

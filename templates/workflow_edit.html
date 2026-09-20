@@ -57,21 +57,28 @@
   const wid = {{ wf.id }};
 
   async function load() {
-    const res = await fetch('/api/workflows/' + wid);
-    const data = await res.json();
-    if (!res.ok) { $('loading').textContent = data.error || res.status; return; }
-    $('wfName').value = data.name;
-    $('wfBase').value = data.base_model || '';
-    $('wfScene').value = data.scene || '';
-    $('wfPurpose').value = data.purpose || '';
-    $('wfFav').checked = !!data.fav;
-    renderParamEditor($('paramRows'), data.params);
-    $('editor').hidden = false;
-    $('loading').hidden = true;
+    try {
+      const res = await fetch('/api/workflows/' + wid);
+      const data = await res.json();
+      if (!res.ok) { $('loading').textContent = data.error || res.status; return; }
+      $('wfName').value = data.name;
+      $('wfBase').value = data.base_model || '';
+      $('wfScene').value = data.scene || '';
+      $('wfPurpose').value = data.purpose || '';
+      $('wfFav').checked = !!data.fav;
+      renderParamEditor($('paramRows'), data.params);
+      $('editor').hidden = false;
+      $('loading').hidden = true;
+    } catch (e) {
+      $('loading').textContent = '加载失败: ' + e.message;
+    }
   }
 
   $('btnSave').addEventListener('click', async () => {
     $('saveError').hidden = true;
+    const btn = $('btnSave');
+    btn.classList.add('is-loading');
+    btn.disabled = true;
     try {
       const res = await fetch('/api/workflows/' + wid, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -88,6 +95,9 @@
     } catch (e) {
       $('saveError').textContent = e.message;
       $('saveError').hidden = false;
+    } finally {
+      btn.classList.remove('is-loading');
+      btn.disabled = false;
     }
   });
 

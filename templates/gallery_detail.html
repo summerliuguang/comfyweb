@@ -41,6 +41,7 @@
   const BASE_POS = {{ pos }}, TOTAL = {{ total }}, IDX0 = {{ idx }};
   const NEWER_RID = {{ newer_rid | tojson }}, OLDER_RID = {{ older_rid | tojson }};
   let cur = {{ idx }};
+  let shownTotal = TOTAL;   // 删除后分母减一(TOTAL 常量保持服务端初值)
   const viewer = document.getElementById('viewer');
   const img = document.getElementById('detailImg');
   const posEl = document.getElementById('posEl');
@@ -160,16 +161,18 @@
     const curIt = NEIGHBORS[cur];
     if (!curIt || !curIt.task) return;
     if (!confirm('从画廊删除这条图片记录?')) return;
-    const r = await fetch(`/api/gallery/image/${NEIGHBORS[cur].id}/delete`, { method: 'POST' });
-    if (r.ok) {
-      NEIGHBORS.splice(cur, 1);
-      delete paramsCache[NEIGHBORS[cur] ? NEIGHBORS[cur].id : -1];
-      if (!NEIGHBORS.length) { location.href = '/gallery'; return; }
-      toast('已删除');
-      cur = Math.min(cur, NEIGHBORS.length - 1);
-      goTo(cur, false, true);
-      renderSheetBody(NEIGHBORS[cur]);
-    } else { const d = await r.json().catch(() => ({})); alert(d.error || r.status); }
+    try {
+      const r = await fetch(`/api/gallery/image/${curIt.id}/delete`, { method: 'POST' });
+      if (r.ok) {
+        delete paramsCache[curIt.rid];   // 缓存键是 rid(此前错用任务 id,永远删不中)
+        NEIGHBORS.splice(cur, 1);
+        shownTotal -= 1;
+        if (!NEIGHBORS.length) { location.href = '/gallery'; return; }
+        toast('已删除');
+        cur = Math.min(cur, NEIGHBORS.length - 1);
+        goTo(cur, false, true);   // goTo 内部已 renderSheetBody,不再重复调
+      } else { const d = await r.json().catch(() => ({})); alert(d.error || r.status); }
+    } catch (e) { toast('删除失败: ' + e.message); }
   });
 
   /* 收藏:星标跟随当前图片,点击切换 */
@@ -186,12 +189,14 @@
   btnFav.addEventListener('click', async () => {
     const it = NEIGHBORS[cur];
     if (!it || !it.task) return;
-    const r = await fetch(`/api/gallery/image/${it.id}/fav`, { method: 'POST' });
-    if (!r.ok) return;
-    const d = await r.json();
-    it.f = d.fav;
-    syncFav();
-    toast(d.fav ? '已收藏' : '已取消收藏');
+    try {
+      const r = await fetch(`/api/gallery/image/${it.id}/fav`, { method: 'POST' });
+      if (!r.ok) { toast('收藏失败'); return; }
+      const d = await r.json();
+      it.f = d.fav;
+      syncFav();
+      toast(d.fav ? '已收藏' : '已取消收藏');
+    } catch (e) { toast('收藏失败: ' + e.message); }
   });
 
   /* AJAX 切换:带方向动画,地址栏同步,无需整页刷新 */
@@ -210,7 +215,7 @@
     img.src = it.url;
     img.onload = () => { switching = false; };
     setTimeout(() => { switching = false; }, 900);  // 加载卡住时兜底
-    posEl.textContent = `${BASE_POS - IDX0 + cur}/${TOTAL}`;
+    posEl.textContent = `${BASE_POS - IDX0 + cur}/${shownTotal}`;
     document.getElementById('sPrompt').textContent = it.prompt || '(无提示词)';
     document.getElementById('sMeta').textContent =
       [it.wf, it.m, it.ts].filter(Boolean).join(' · ');

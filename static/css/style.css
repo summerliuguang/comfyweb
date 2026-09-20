@@ -32,13 +32,14 @@
 .wf-filter-row{display:flex;gap:.35rem;align-items:center;flex-wrap:wrap}
 .wf-filter-label{font-size:.72rem;color:var(--muted);flex:none;width:2.4rem}
 .chip{border:1px solid var(--line);background:var(--card);color:var(--text);
-  border-radius:999px;padding:.18rem .65rem;font-size:.75rem;cursor:pointer;
+  border-radius:999px;padding:.32rem .8rem;font-size:.75rem;cursor:pointer;
   transition:background-color .18s ease,border-color .18s ease,color .18s ease}
 .chip:hover{border-color:#c9cfdd}
 .chip.on{background:var(--primary-weak);border-color:var(--primary);color:var(--primary)}
 
-/* ComfyUI 连接状态圆点(顶栏;侧栏用 .status 组件) */
-.conn-dot{flex:none;width:8px;height:8px;border-radius:999px;background:#c2c7d2;display:inline-block}
+/* ComfyUI 连接状态圆点(顶栏;侧栏用 .status 组件);::before 扩点击热区 */
+.conn-dot{flex:none;width:8px;height:8px;border-radius:999px;background:#c2c7d2;display:inline-block;cursor:pointer;position:relative}
+.conn-dot::before{content:'';position:absolute;inset:-14px;border-radius:50%}
 .conn-dot.ok{background:var(--ok)}
 .conn-dot.bad{background:var(--bad)}
 
@@ -112,11 +113,12 @@ details.adv[open]>summary::before{transform:rotate(90deg)}
 .masonry .gitem:hover{border-color:#c9cfdd}
 .masonry .gitem img{width:100%;height:auto;display:block}
 .masonry .gitem .gmeta{padding:.35rem .5rem;font-size:.7rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-top:1px solid var(--line)}
-/* 收藏角标:卡片右上角悬浮星标 */
-.fav-btn{position:absolute;top:.35rem;right:.35rem;z-index:2;width:1.7rem;height:1.7rem;
+/* 收藏角标:卡片右上角悬浮星标(::before 扩触控热区到 ~40px,不改视觉) */
+.fav-btn{position:absolute;top:.35rem;right:.35rem;z-index:2;width:1.9rem;height:1.9rem;
   display:flex;align-items:center;justify-content:center;border:none;cursor:pointer;
   font-size:.95rem;line-height:1;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.5);
   background:rgba(20,22,30,.35);border-radius:999px;padding:0}
+.fav-btn::before{content:'';position:absolute;inset:-8px;border-radius:50%}
 .fav-btn:hover{background:rgba(20,22,30,.6)}
 .fav-btn.on{color:#ffd75e}
 /* 详情页顶栏收藏星标点亮态 */
@@ -238,3 +240,13 @@ details.adv[open]>summary::before{transform:rotate(90deg)}
 /* hidden 属性兜底:Bulma 0.9.4 无此规则,凡 author 层给元素设了 display
    (.vchip/.pager/.select 等),hidden 会被覆盖失效(实测坑) */
 [hidden]{display:none!important}
+
+/* 裸 checkbox 扩大触控区:label 整块可点(workflows 启用开关等),热区 >= 40px */
+.hit-wrap{display:inline-flex;align-items:center;justify-content:center;padding:.9rem;cursor:pointer;margin:-.9rem}
+
+/* 全局轻提示(base.html window.toast) */
+.g-toast{position:fixed;left:50%;bottom:calc(1.2rem + env(safe-area-inset-bottom));transform:translateX(-50%);
+  z-index:1200;background:rgba(24,28,40,.92);color:#eef1f8;padding:.5rem 1rem;border-radius:999px;
+  font-size:.82rem;opacity:0;transition:opacity .2s ease;pointer-events:none;max-width:80vw;text-align:center}
+.g-toast.show{opacity:1}
+[data-theme="dark"] .g-toast{background:rgba(238,241,248,.92);color:#1a1d28}

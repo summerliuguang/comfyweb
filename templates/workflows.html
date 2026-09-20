@@ -61,7 +61,7 @@
           {% if w.base_model %}<span class="tag is-light">{{ w.base_model }}</span>{% endif %}
           {% if w.scene %}<span class="tag is-light">{{ w.scene }}</span>{% endif %}
         </td>
-        <td class="w-check" data-label="启用"><input type="checkbox" class="w-enabled" data-id="{{ w.id }}" {{ 'checked' if w.enabled }}></td>
+        <td class="w-check" data-label="启用"><label class="hit-wrap"><input type="checkbox" class="w-enabled" data-id="{{ w.id }}" {{ 'checked' if w.enabled }}></label></td>
         <td class="task-meta" data-label="创建时间">{{ w.created_at }}</td>
         <td data-label="操作">
           <div class="buttons" style="justify-content:flex-end;margin:0">
@@ -213,9 +213,15 @@
       b.addEventListener('click', async () => {
         if (!confirm(`删除模板「${c.name}」?生成记录与图片不受影响。`)) return;
         b.classList.add('is-loading');
-        const r = await fetch(`/api/workflows/${c.id}/delete`, { method: 'POST' });
-        if (r.ok) location.reload();
-        else { b.classList.remove('is-loading'); const d2 = await r.json().catch(() => ({})); alert(d2.error || r.status); }
+        b.disabled = true;
+        try {
+          const r = await fetch(`/api/workflows/${c.id}/delete`, { method: 'POST' });
+          if (r.ok) location.reload();
+          else { b.classList.remove('is-loading'); b.disabled = false; const d2 = await r.json().catch(() => ({})); alert(d2.error || r.status); }
+        } catch (e) {
+          b.classList.remove('is-loading'); b.disabled = false;
+          window.toast && toast('删除失败: ' + e.message);
+        }
       });
       row.append(info, b);
       card.appendChild(row);
