@@ -179,6 +179,31 @@ class TestNsfwFiltering(unittest.TestCase):
             db.execute("DELETE FROM tasks WHERE workflow_id=?", (wid,))
             db.execute("DELETE FROM workflows WHERE id=?", (wid,))
 
+    def test_batch_endpoint(self):
+        """批量端点:私密化/删除/参数校验/上限。"""
+        rids = {fn: _place(fn) for fn in ("bat1_.png", "bat2_.png", "bat3_.png")}
+        try:
+            r = client_app.post("/api/gallery/batch",
+                                json={"action": "private", "rowids": [rids["bat1_.png"], rids["bat2_.png"]],
+                                      "nsfw": True})
+            self.assertEqual(r.get_json()["done"], 2)
+            self.assertTrue(library.indexed("bat1_.png")["nsfw"])
+            r = client_app.post("/api/gallery/batch",
+                                json={"action": "delete", "rowids": [rids["bat2_.png"], rids["bat3_.png"]]})
+            self.assertEqual(r.get_json()["done"], 2)
+            self.assertIsNone(library.indexed("bat2_.png"))
+            self.assertIsNone(library.indexed("bat3_.png"))
+            self.assertEqual(client_app.post("/api/gallery/batch",
+                           json={"action": "x", "rowids": [1]}).status_code, 400)
+            self.assertEqual(client_app.post("/api/gallery/batch",
+                           json={"action": "delete", "rowids": list(range(501))}).status_code, 400)
+        finally:
+            with library._lock:
+                conn = library._lib_connect()
+                for fn in ("bat1_.png", "bat2_.png", "bat3_.png"):
+                    conn.execute("DELETE FROM files WHERE filename=?", (fn,))
+                conn.commit()
+
     def test_model_meta_nsfw_endpoint(self):
         r = client_app.post("/api/local/meta-nsfw",
                             json={"folder": "checkpoints", "filename": "x.safetensors",

@@ -48,6 +48,7 @@
       {% endfor %}
     </select>
     <button class="button is-small is-link" type="submit">筛选</button>
+    <button class="button is-small" type="button" id="btnBatchMode">批量选择</button>
     {% if q or cur.get('wf') or cur.get('model') or cur.get('lora') or cur.get('cat') or cur.get('batch') or cur.get('range') in ('today', '7d', '30d') %}
     <a class="button is-small is-light" href="/gallery">清除</a>
     {% endif %}
@@ -62,6 +63,7 @@
     {% for it in items %}
     <a class="gitem" href="/gallery/view/{{ it.rowid }}{% if qs %}?{{ qs }}{% endif %}">
       <img src="{{ it.thumb }}" loading="lazy" alt="图片">
+      <span class="sel-mark" aria-hidden="true"></span>
       {% if it.task_img_id %}
       <button class="fav-btn{{ ' on' if it.fav }}" type="button" data-fav="{{ it.task_img_id }}"
         title="{{ '取消收藏' if it.fav else '收藏' }}">{% if it.fav %}<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" stroke="none" aria-hidden="true"><path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.6 9.7l5.8-.8z"/></svg>{% else %}<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.6 9.7l5.8-.8z"/></svg>{% endif %}</button>
@@ -69,6 +71,12 @@
       <div class="gmeta" title="{{ it.label }}">{{ it.label or '(未分类)' }}</div>
     </a>
     {% endfor %}
+  </div>
+  <div class="batch-bar" id="batchBar">
+    <span class="status" id="batchCount">已选 0 张</span>
+    <button class="button is-small is-warning" id="btnBatchNsfw">设为私密</button>
+    <button class="button is-small is-danger" id="btnBatchDel">删除</button>
+    <button class="button is-small" id="btnBatchCancel">取消选择</button>
   </div>
   {% if pages > 1 %}
   <div class="pager">
@@ -88,7 +96,61 @@
 const FAV_ON = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" stroke="none" aria-hidden="true"><path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.6 9.7l5.8-.8z"/></svg>';
 const FAV_OFF = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.6 9.7l5.8-.8z"/></svg>';
 /* 收藏切换:事件委托(卡片是 <a>,点星标要拦住跳转) */
+/* ---------- 批量选择(勾选后批量删除/设为私密) ---------- */
+let batchMode = false;
+const batchSel = new Set();
+
+function updateBatchCount() {
+  document.getElementById('batchCount').textContent = `已选 ${batchSel.size} 张`;
+}
+
+function setBatchMode(on) {
+  batchMode = on;
+  document.body.classList.toggle('batch-mode', on);
+  document.getElementById('batchBar').classList.toggle('on', on);
+  if (!on) {
+    batchSel.clear();
+    document.querySelectorAll('.gitem.sel').forEach(el => el.classList.remove('sel'));
+  }
+  updateBatchCount();
+}
+
+function toggleSel(card) {
+  const rid = parseInt(card.getAttribute('href').split('/').pop().split('?')[0], 10);
+  if (batchSel.has(rid)) { batchSel.delete(rid); card.classList.remove('sel'); }
+  else { batchSel.add(rid); card.classList.add('sel'); }
+  updateBatchCount();
+}
+
+document.getElementById('btnBatchMode').addEventListener('click', () => setBatchMode(!batchMode));
+document.getElementById('btnBatchCancel').addEventListener('click', () => setBatchMode(false));
+
+async function batchAct(action, nsfw) {
+  if (!batchSel.size) { window.toast && toast('先勾选图片'); return; }
+  const n = batchSel.size;
+  if (action === 'delete' &&
+      !confirm(`彻底删除选中的 ${n} 张图片?正本/缩略图/记录一并删除,不可逆`)) return;
+  if (action === 'private' &&
+      !confirm(`把选中的 ${n} 张图片${nsfw ? '标为私密' : '取消私密'}?(移入/移出 nsfw 归档区)`)) return;
+  try {
+    const r = await fetch('/api/gallery/batch', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, rowids: [...batchSel], nsfw }) });
+    const d = await r.json();
+    if (!r.ok) { window.toast && toast(d.error || '操作失败'); return; }
+    if (d.failed) alert(`完成 ${d.done} 张,失败 ${d.failed} 张:\n` + (d.errors || []).join('\n'));
+    location.reload();   // 刷新后筛选/计数/过滤状态全部正确
+  } catch (e) { window.toast && toast('操作失败: ' + e.message); }
+}
+document.getElementById('btnBatchDel').addEventListener('click', () => batchAct('delete'));
+document.getElementById('btnBatchNsfw').addEventListener('click', () => batchAct('private', true));
+
 document.querySelector('.masonry').addEventListener('click', async (e) => {
+  if (batchMode) {
+    const card = e.target.closest('.gitem');
+    if (card) { e.preventDefault(); toggleSel(card); }
+    return;   // 选择模式下点收藏角标也视为勾选
+  }
   const btn = e.target.closest('.fav-btn');
   if (!btn) return;
   e.preventDefault();
@@ -177,6 +239,10 @@ document.querySelector('.masonry').addEventListener('click', async (e) => {
     img.loading = 'lazy';
     img.alt = '图片';
     a.appendChild(img);
+    const mark = document.createElement('span');
+    mark.className = 'sel-mark';
+    mark.setAttribute('aria-hidden', 'true');
+    a.appendChild(mark);
     if (it.task_img_id) {
       const b = document.createElement('button');
       b.className = 'fav-btn' + (it.fav ? ' on' : '');

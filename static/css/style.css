@@ -250,3 +250,19 @@ details.adv[open]>summary::before{transform:rotate(90deg)}
   font-size:.82rem;opacity:0;transition:opacity .2s ease;pointer-events:none;max-width:80vw;text-align:center}
 .g-toast.show{opacity:1}
 [data-theme="dark"] .g-toast{background:rgba(238,241,248,.92);color:#1a1d28}
+
+/* 画廊批量选择模式 */
+.gitem .sel-mark{display:none;position:absolute;top:.35rem;left:.35rem;z-index:3;
+  width:1.5rem;height:1.5rem;border-radius:50%;border:2px solid #fff;
+  background:rgba(20,22,30,.45);align-items:center;justify-content:center}
+.gitem.sel .sel-mark{background:var(--primary);border-color:var(--primary)}
+.gitem.sel .sel-mark::after{content:'✓';color:#fff;font-size:.9rem;font-weight:700}
+.gitem.sel{outline:3px solid var(--primary);outline-offset:-3px}
+body.batch-mode .gitem{cursor:pointer}
+body.batch-mode .gitem .sel-mark{display:flex}
+body.batch-mode .gitem .fav-btn{display:none}
+.batch-bar{display:none;position:fixed;left:0;right:0;
+  bottom:env(safe-area-inset-bottom);z-index:1100;align-items:center;justify-content:center;
+  gap:.6rem;padding:.7rem .8rem;background:var(--card);border-top:1px solid var(--line);
+  flex-wrap:wrap;box-shadow:0 -4px 16px rgba(20,24,40,.12)}
+.batch-bar.on{display:flex}

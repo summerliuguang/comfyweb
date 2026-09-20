@@ -303,6 +303,36 @@ def api_gallery_fav(img_id):
     return {"ok": True, "fav": bool(fav)}
 
 
+@bp.post("/api/gallery/batch")
+def api_gallery_batch():
+    """批量操作(画廊勾选模式):action=delete 逐张彻底删除(含墓碑);
+    action=private 按 nsfw 布尔批量私密化/取消。单张上限 500 防误操作与超时。"""
+    d = request.get_json(silent=True) or {}
+    action = d.get("action")
+    rowids = d.get("rowids")
+    if action not in ("delete", "private") or not isinstance(rowids, list) or not rowids:
+        return jsonify({"error": "参数无效"}), 400
+    if len(rowids) > 500:
+        return jsonify({"error": "一次最多 500 张"}), 400
+    clean = [int(r) for r in rowids if str(r).strip().isdigit()]
+    nsfw = bool(d.get("nsfw"))
+    done = failed = 0
+    errors = []
+    for rid in clean:
+        if action == "delete":
+            ok, error = library.delete_image(rid)
+        else:
+            ok, error = library.mark_private(rid, nsfw)
+        if ok:
+            done += 1
+        else:
+            failed += 1
+            if len(errors) < 3:
+                errors.append(f"#{rid}: {error}")
+    return {"ok": True, "done": done, "failed": failed, "errors": errors,
+            "nsfw": nsfw if action == "private" else None}
+
+
 @bp.post("/api/library/image/<int:rowid>/nsfw")
 def api_library_image_nsfw(rowid):
     """单张图片标私密/取消:移入或移出 nsfw/ 子树(文件+缩略图+索引同步)。"""
