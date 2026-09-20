@@ -2,6 +2,7 @@
 
 使用独立临时数据目录(COMFYWEB_DATA_DIR)与临时 library 目录,绝不触碰生产与 NAS。
 """
+import json
 import os
 import sqlite3
 import sys
@@ -173,6 +174,124 @@ class TestPlaceAndCollect(unittest.TestCase):
         self.assertEqual(library.find_on_nas("loose_001_.png"),
                          self.out / "loose_001_.png")
         self.assertIsNone(library.find_on_nas("nope_999_.png"))
+
+
+def _make_comfy_png(path, seed=42, pos="a cat, best quality", neg="worst quality"):
+    """生成带 ComfyUI 'prompt' tEXt 块的 PNG(API 格式,含节点引用链)。"""
+    from PIL import Image, PngImagePlugin
+    nodes = {
+        "1": {"class_type": "CheckpointLoaderSimple",
+              "inputs": {"ckpt_name": "anima_v11.safetensors"}},
+        "2": {"class_type": "CLIPTextEncode", "inputs": {"text": pos, "clip": ["4", 0]}},
+        "3": {"class_type": "CLIPTextEncode", "inputs": {"text": neg, "clip": ["4", 0]}},
+        "4": {"class_type": "CLIPLoader", "inputs": {}},
+        "5": {"class_type": "KSampler",
+              "inputs": {"seed": seed, "steps": 28, "cfg": 5.5,
+                         "sampler_name": "euler_ancestral", "scheduler": "karras",
+                         "denoise": 1.0, "model": ["6", 0], "positive": ["2", 0],
+                         "negative": ["3", 0], "latent_image": ["7", 0]}},
+        "6": {"class_type": "LoraLoader",
+              "inputs": {"lora_name": "detail.safetensors", "model": ["1", 0]}},
+        "7": {"class_type": "EmptyLatentImage", "inputs": {"width": 512, "height": 768}},
+    }
+    meta = PngImagePlugin.PngInfo()
+    meta.add_text("prompt", json.dumps(nodes))
+    _make_png(path)
+    with Image.open(path) as im:
+        im.save(path, pnginfo=meta)
+
+
+class TestEmbeddedParams(unittest.TestCase):
+    def test_parse_and_backfill(self):
+        """带内嵌块的 PNG:引用链解出正/负提示词,seed/采样器/模型/LoRA 全部落库。"""
+        src = Path(tempfile.mkdtemp()) / "emb_001_.png"
+        _make_comfy_png(src)
+        library.place(src, "emb_001_.png")
+        row = library.indexed("emb_001_.png")
+        self.assertTrue(library.params_backfill(row))
+        row = library.indexed("emb_001_.png")
+        self.assertIn("a cat", row["prompt"])
+        self.assertEqual(row["seed"], 42)
+        params = json.loads(row["params_json"])
+        self.assertEqual(params["positive"], "a cat, best quality")
+        self.assertEqual(params["negative"], "worst quality")
+        self.assertEqual(params["sampler"], "euler_ancestral")
+        self.assertEqual(params["scheduler"], "karras")
+        self.assertEqual(params["steps"], 28)
+        self.assertEqual(params["model"], "anima_v11.safetensors")
+        self.assertEqual(params["lora"], "detail.safetensors")
+
+    def test_conditioning_wrap_traversed(self):
+        """正面经 conditioning 包装节点:穿透找到文本,不落入兜底。"""
+        from PIL import Image, PngImagePlugin
+        neg = "worst quality, low quality, very long negative text here"
+        nodes = {
+            "1": {"class_type": "CLIPTextEncode", "inputs": {"text": neg}},
+            "2": {"class_type": "CLIPTextEncode", "inputs": {"text": "a beautiful cat"}},
+            "3": {"class_type": "ConditioningCombine", "inputs": {"conditioning_1": ["2", 0]}},
+            "5": {"class_type": "KSampler", "inputs": {"seed": 7, "sampler_name": "euler",
+                  "positive": ["3", 0], "negative": ["1", 0]}},
+        }
+        meta = PngImagePlugin.PngInfo()
+        meta.add_text("prompt", json.dumps(nodes))
+        src = Path(tempfile.mkdtemp()) / "wrap_001_.png"
+        _make_png(src)
+        with Image.open(src) as im:
+            im.save(src, pnginfo=meta)
+        library.place(src, "wrap_001_.png")
+        library.params_backfill(library.indexed("wrap_001_.png"))
+        row = library.indexed("wrap_001_.png")
+        params = json.loads(row["params_json"])
+        self.assertEqual(params["positive"], "a beautiful cat")
+        self.assertEqual(params["negative"], neg)
+        self.assertEqual(row["prompt"], "a beautiful cat")
+
+    def test_fallback_excludes_negative_hints(self):
+        """引用断裂走兜底:负面特征词即使更长也不被选为正面提示词。"""
+        from PIL import Image, PngImagePlugin
+        nodes = {
+            "1": {"class_type": "CLIPTextEncode",
+                  "inputs": {"text": "worst quality, low quality, very very long negative"}},
+            "2": {"class_type": "CLIPTextEncode", "inputs": {"text": "1girl, smile"}},
+            "5": {"class_type": "KSampler", "inputs": {"seed": 7, "sampler_name": "euler",
+                  "positive": ["missing", 0], "negative": ["1", 0]}},
+        }
+        meta = PngImagePlugin.PngInfo()
+        meta.add_text("prompt", json.dumps(nodes))
+        src = Path(tempfile.mkdtemp()) / "fall_001_.png"
+        _make_png(src)
+        with Image.open(src) as im:
+            im.save(src, pnginfo=meta)
+        library.place(src, "fall_001_.png")
+        library.params_backfill(library.indexed("fall_001_.png"))
+        row = library.indexed("fall_001_.png")
+        self.assertEqual(json.loads(row["params_json"])["positive"], "1girl, smile")
+        self.assertEqual(row["prompt"], "1girl, smile")
+
+    def test_plain_png_marked_not_resent(self):
+        """无内嵌块的图:回填返回 False 且 params_json 置空串(已扫标记,不重扫)。"""
+        src = Path(tempfile.mkdtemp()) / "plain_999_.png"
+        _make_png(src)
+        library.place(src, "plain_999_.png")
+        row = library.indexed("plain_999_.png")
+        self.assertFalse(library.params_backfill(row))
+        self.assertEqual(library.indexed("plain_999_.png")["params_json"], "")
+
+    def test_backfill_preserves_existing_prompt(self):
+        """任务库匹配过 prompt 的行:回填只补 params_json,不覆盖已有提示词。"""
+        src = Path(tempfile.mkdtemp()) / "kept_001_.png"
+        _make_comfy_png(src)
+        library.place(src, "kept_001_.png")
+        with library._lock:
+            conn = library._lib_connect()
+            conn.execute("UPDATE files SET prompt='任务里的原提示词', seed=999 "
+                         "WHERE filename='kept_001_.png'")
+            conn.commit()
+        self.assertTrue(library.params_backfill(library.indexed("kept_001_.png")))
+        row = library.indexed("kept_001_.png")
+        self.assertEqual(row["prompt"], "任务里的原提示词")
+        self.assertEqual(row["seed"], 999)
+        self.assertIn("best quality", row["params_json"])
 
 
 class TestLibV2(unittest.TestCase):

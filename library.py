@@ -146,7 +146,8 @@ _FILES_DDL = """CREATE TABLE files(
     tags TEXT DEFAULT '[]',
     size INTEGER DEFAULT 0,
     source TEXT DEFAULT '',
-    created_at TEXT DEFAULT (datetime('now','localtime'))
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    params_json TEXT
 )"""
 
 
@@ -185,6 +186,12 @@ def _lib_connect():
             _migrate_v1(conn, library_dir().name)
         elif not info:
             conn.execute(_FILES_DDL)
+        # 建表/迁移后按实际结构补列(旧库自动加 params_json)
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(files)")}
+        if "params_json" not in cols:
+            conn.execute("ALTER TABLE files ADD COLUMN params_json TEXT")
+        conn.execute("UPDATE files SET seed=NULL WHERE seed=''")  # 旧写入把空串塞进过 INTEGER 列
+        conn.commit()
         conn.execute("CREATE INDEX IF NOT EXISTS idx_files_created ON files(created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_files_filename ON files(filename)")
         _lib_conn = conn
@@ -347,6 +354,149 @@ def thumb_sweep(limit=6):
     return done
 
 
+# ---------- 图片内嵌参数(ComfyUI PNG tEXt 'prompt' 块,API 格式) ----------
+# 非 comfyweb 生成的图没有任务记录,但 ComfyUI 落盘时把完整工作流写进了 PNG,
+# 从这里把提示词/seed/采样器等补进索引,详情页才能对无记录图显示参数。
+
+def _chunk_text(value, nodes):
+    """解引用 API 格式输入:引用形如 [node_id, output_slot],逐层追到字符串。"""
+    seen = 0
+    while isinstance(value, list) and len(value) == 2 and seen < 10:
+        node = nodes.get(str(value[0]))
+        if not node:
+            return None
+        ins = node.get("inputs", {})
+        for k in ("text", "value", "string"):
+            if k in ins:
+                value = ins[k]
+                break
+        else:
+            return None
+        seen += 1
+    return value.strip() if isinstance(value, str) else None
+
+
+NEG_HINTS = ("worst quality", "low quality", "bad quality", "bad anatomy",
+             "negative embedding", "bad hand")
+
+
+def _conditioning_text(ref, nodes):
+    """从采样器的 positive/negative 引用出发,穿透 conditioning 包装节点
+    (PerpNeg/ConditioningCombine 等),找到链上第一个 CLIPTextEncode 的文本。"""
+    seen = set()
+    stack = [ref]
+    while stack:
+        cur = stack.pop()
+        if not (isinstance(cur, list) and len(cur) == 2):
+            continue
+        key = str(cur[0])
+        if key in seen:
+            continue
+        seen.add(key)
+        node = nodes.get(key)
+        if not node:
+            continue
+        ins = node.get("inputs", {})
+        if node.get("class_type") == "CLIPTextEncode":
+            return _chunk_text(ins.get("text"), nodes)
+        for v in ins.values():   # 包装节点:继续追所有节点引用
+            if isinstance(v, list) and len(v) == 2:
+                stack.append(v)
+    return None
+
+
+def parse_png_params(path):
+    """从 PNG 内嵌 'prompt' 块解析生成参数,返回 dict 或 None(无块/损坏)。
+    只读文件头(tEXt 在像素数据之前),不解码像素,CIFS 上也快。"""
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            raw = im.info.get("prompt")
+    except Exception:
+        return None
+    if not raw:
+        return None
+    try:
+        nodes = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(nodes, dict) or not nodes:
+        return None
+    out = {}
+    clip_texts = []
+    for node in nodes.values():
+        ct = node.get("class_type", "")
+        ins = node.get("inputs", {})
+        if "sampler_name" in ins or "noise_seed" in ins or ct.startswith("KSampler"):
+            if isinstance(ins.get("sampler_name"), str) and ins["sampler_name"]:
+                out.setdefault("sampler", ins["sampler_name"])
+            for key in ("scheduler", "steps", "cfg", "denoise"):
+                if isinstance(ins.get(key), (int, float, str)) and ins[key] != "":
+                    out.setdefault(key, ins[key])
+            for sk in ("seed", "noise_seed"):
+                if isinstance(ins.get(sk), int):
+                    out.setdefault("seed", ins[sk])
+            for role in ("positive", "negative"):
+                ref = ins.get(role)
+                if isinstance(ref, list):
+                    text = _conditioning_text(ref, nodes)
+                    if text:
+                        out.setdefault(role, text)
+        if ct == "CLIPTextEncode":
+            t = _chunk_text(ins.get("text"), nodes)
+            if t:
+                clip_texts.append(t)
+        if ct.startswith("CheckpointLoader") and isinstance(ins.get("ckpt_name"), str):
+            out.setdefault("model", ins["ckpt_name"])
+        if isinstance(ins.get("lora_name"), str):
+            out.setdefault("lora", ins["lora_name"])
+    # 引用链没追到文本时(复杂图结构),拿最长的非负面特征 CLIP 文本兜底——
+    # 负面提示词(如 "worst quality, low quality, ...")往往比正面还长,必须先排除
+    if "positive" not in out and clip_texts:
+        plain = [t for t in clip_texts
+                 if not t.lower().startswith(NEG_HINTS)]
+        if plain:
+            out["positive"] = max(plain, key=len)
+    out = {k: v for k, v in out.items() if v not in (None, "")}
+    return out or None
+
+
+def params_backfill(row):
+    """解析单行图片的内嵌参数并回填索引。返回 True 表示行有写入。"""
+    params = parse_png_params(nas_root() / row["path"])
+    with _lock:
+        conn = _lib_connect()
+        if not params:
+            # 写空串作"已扫无参数"标记,避免每轮重扫;已有 prompt/seed 不覆盖
+            conn.execute("UPDATE files SET params_json='' WHERE path=?", (row["path"],))
+            conn.commit()
+            return False
+        conn.execute(
+            "UPDATE files SET params_json=?, "
+            "prompt=CASE WHEN IFNULL(prompt,'')='' THEN ? ELSE prompt END, "
+            "seed=CASE WHEN COALESCE(seed,'')='' THEN ? ELSE seed END WHERE path=?",
+            (json.dumps(params, ensure_ascii=False),
+             params.get("positive") or "", params.get("seed"), row["path"]))
+        conn.commit()
+    return True
+
+
+def params_sweep(limit=20):
+    """从图片内嵌参数补全索引(后台线程低频调用;PNG 文件头读取,单张毫秒级)。"""
+    with _lock:
+        conn = _lib_connect()
+        rows = conn.execute(
+            "SELECT rowid, * FROM files WHERE params_json IS NULL LIMIT ?", (limit,)).fetchall()
+    done = 0
+    for r in rows:
+        try:
+            if params_backfill(dict(r)):
+                done += 1
+        except Exception as e:
+            log.warning("参数提取失败 %s: %s", r["filename"], e)
+    return done
+
+
 # ---------- 全库摄取(output/ 手工子目录原地索引,不移动文件) ----------
 
 def ingest_refresh():
@@ -386,7 +536,7 @@ def ingest_refresh():
                            meta.get("batch") if meta else "",
                            meta.get("workflow") if meta else "",
                            meta.get("prompt") if meta else "",
-                           meta.get("seed") if meta else "",
+                           meta.get("seed") if meta else None,
                            meta.get("lora") if meta else "",
                            tags, st.st_size, "ingest", ctime)
                 changed += 1
@@ -468,7 +618,7 @@ def place(local_path: Path, filename, source="archive"):
     _index_add(rel, filename, None,
                meta.get("model") if meta else "", meta.get("category") if meta else "",
                meta.get("batch") if meta else "", meta.get("workflow") if meta else "",
-               meta.get("prompt") if meta else "", meta.get("seed") if meta else "",
+               meta.get("prompt") if meta else "", meta.get("seed") if meta else None,
                meta.get("lora") if meta else "", tags, size, source)
     return rel
 
@@ -505,7 +655,7 @@ def collect_once(limit=50):
         _index_add(rel, p.name, None,
                    meta.get("model") if meta else "", meta.get("category") if meta else "",
                    meta.get("batch") if meta else "", meta.get("workflow") if meta else "",
-                   meta.get("prompt") if meta else "", meta.get("seed") if meta else "",
+                   meta.get("prompt") if meta else "", meta.get("seed") if meta else None,
                    meta.get("lora") if meta else "", tags,
                    dest.stat().st_size, "collect")
         moved += 1

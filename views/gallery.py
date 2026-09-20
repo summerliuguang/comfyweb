@@ -215,14 +215,22 @@ def page_gallery_view(rowid):
 
 @bp.get("/api/library/image/<int:rowid>/info")
 def api_library_image_info(rowid):
-    """非任务图的详情面板数据(库内信息)。"""
+    """非任务图的详情面板数据(库内信息 + 从 PNG 内嵌块解析出的生成参数)。"""
     r = library.get(rowid)
     if not r:
         return jsonify({"error": "图片不存在"}), 404
+    params = None
+    if r["params_json"]:
+        try:
+            params = json.loads(r["params_json"])
+        except ValueError:
+            params = None
     return {"filename": r["filename"], "model": r["model"], "category": r["category"],
             "batch": r["batch"], "workflow": r["workflow"], "size": r["size"],
-            "created_at": r["created_at"],
-            "tags": json.loads(r["tags"] or "[]")}
+            "created_at": r["created_at"], "prompt": r["prompt"] or None,
+            "seed": r["seed"],
+            "tags": json.loads(r["tags"] or "[]"),
+            "params": params}
 
 
 @bp.get("/gallery/image/<int:img_id>")

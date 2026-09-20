@@ -297,6 +297,10 @@ def _loop():
                 done = library.thumb_sweep(limit=6)  # 逐批补齐缺缩略图的行
                 if done:
                     _index_dirty = True
+            if remote_ready():
+                done = library.params_sweep(limit=20)  # 逐批提取图片内嵌生成参数
+                if done:
+                    _index_dirty = True
             sync_pending()
             if _index_dirty and remote_ready() and time.time() - last_snapshot > SNAPSHOT_MIN_INTERVAL:
                 try:

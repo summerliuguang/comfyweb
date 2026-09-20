@@ -115,16 +115,33 @@
       }
       if (!it.task) {
         const kb = d.size ? (d.size / 1024).toFixed(0) + ' KB' : '--';
-        const rows2 = [['文件名', esc(d.filename)], ['模型', esc(d.model || '--')],
-          ['画面类型', esc(d.category || '--')], ['批次主题', esc(d.batch || '--')],
-          ['工作流', esc(d.workflow || '--')], ['标签', esc((d.tags || []).join(', ') || '--')],
-          ['大小', kb], ['时间', esc(d.created_at)]];
-        paramsCache[it.rid] =
+        const p = d.params || {};
+        const rows2 = [];
+        if (d.prompt) rows2.push(['正面提示词', esc(d.prompt)]);
+        if (p.negative) rows2.push(['负面提示词', esc(p.negative)]);
+        if (d.seed != null && d.seed !== undefined) rows2.push(['种子', esc(d.seed)]);
+        if (p.model || d.model) rows2.push(['模型', esc(p.model || d.model)]);
+        if (p.lora) rows2.push(['LoRA', esc(p.lora)]);
+        if (p.sampler) rows2.push(['采样器', esc(p.sampler + (p.scheduler ? ' · ' + p.scheduler : ''))]);
+        if (p.steps != null) rows2.push(['步数', esc(p.steps)]);
+        if (p.cfg != null) rows2.push(['CFG', esc(p.cfg)]);
+        if (d.category) rows2.push(['画面类型', esc(d.category)]);
+        if (d.batch) rows2.push(['批次主题', esc(d.batch)]);
+        if (d.workflow) rows2.push(['工作流', esc(d.workflow)]);
+        rows2.push(['文件名', esc(d.filename)],
+          ['标签', esc((d.tags || []).join(', ') || '--')],
+          ['大小', kb], ['时间', esc(d.created_at)]);
+        const html =
           '<table class="kv">' +
           rows2.map(([k, v]) => `<tr><td>${k}</td><td class="val">${v}</td></tr>`).join('') +
           '</table><div class="buttons" style="margin-top:.9rem">' +
           `<a class="button is-link is-small" href="${it.dl}" download>下载原图</a>` +
           '</div>';
+        // 已解析出参数的才缓存;还没扫到的下次展开重拉(后台 sweep 很快补齐)
+        if (seq !== sheetSeq) return;   // 快速连切时丢弃过期响应
+        if (d.params || d.prompt) paramsCache[it.rid] = html;
+        sheetBody.innerHTML = html;
+        return;
       } else {
         const rows = [];
         rows.push(['工作流', esc(d.workflow_name)]);
