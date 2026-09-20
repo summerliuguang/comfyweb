@@ -209,7 +209,12 @@ def _lib_connect():
             conn.execute("ALTER TABLE files ADD COLUMN params_json TEXT")
         if "nsfw" not in cols:
             conn.execute("ALTER TABLE files ADD COLUMN nsfw INTEGER NOT NULL DEFAULT 0")
+        if "pre_nsfw_path" not in cols:
+            conn.execute("ALTER TABLE files ADD COLUMN pre_nsfw_path TEXT")
         conn.execute("UPDATE files SET seed=NULL WHERE seed=''")  # 旧写入把空串塞进过 INTEGER 列
+        conn.execute("UPDATE files SET pre_nsfw_path=REPLACE(path, 'library/nsfw/', 'library/') "
+                     "WHERE nsfw=1 AND (pre_nsfw_path IS NULL OR pre_nsfw_path='') "
+                     "AND path LIKE 'library/nsfw/%'")
         conn.commit()
         conn.execute("CREATE INDEX IF NOT EXISTS idx_files_created ON files(created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_files_filename ON files(filename)")
@@ -581,55 +586,72 @@ def migrate_to_private(rowids):
     return done
 
 
+def _thumb_rel_for(path_rel):
+    """path(library/x/f.png 或 output/i/f.png)→ 对应缩略图相对路径。"""
+    inner = Path(path_rel)
+    if inner.parts and inner.parts[0] == Path(library_dir().name):
+        inner = Path(*inner.parts[1:])
+    return Path(library_dir().name) / "thumbs" / inner.with_suffix(".webp")
+
+
 def mark_private(rowid, nsfw):
-    """单张图片私密化/取消:文件与缩略图在 nsfw/ 子树与普通树之间移动,索引同步。
-    返回 (ok, error)。取消时按 classify 重算普通区位置(未分类归未分类)。"""
+    """单张图片私密化/取消:文件与缩略图在 nsfw/ 子树与原位置之间移动,索引同步。
+
+    nsfw 树路径 = library/nsfw/<原完整 path>,pre_nsfw_path 记录原位置,取消时精确
+    还原——output 手工子目录的图也会被搬进私密区并在取消时回到原手工目录。
+    返回 (ok, error)。
+    """
     row = get(rowid)
     if not row:
         return False, "图片不存在"
-    old_rel = Path(row["path"])                    # 相对 nas_root,如 library/<模型>/.../f.png
+    old_rel = Path(row["path"])
     lib_name = Path(library_dir().name)
-    try:
-        inner = old_rel.relative_to(lib_name)      # <模型>/.../f.png
-    except ValueError:
-        return False, "索引路径异常"
     in_nsfw = bool(row["nsfw"])
     if nsfw == in_nsfw:
         return True, ""
     try:
         if nsfw:
-            new_inner = Path("nsfw") / inner
+            new_rel = Path(lib_name) / "nsfw" / old_rel
+            new_thumb_rel = Path(lib_name) / "thumbs" / "nsfw" / old_rel.with_suffix(".webp")
+            pre = str(old_rel)
         else:
-            new_inner = Path(str(inner).split("/", 1)[1]
-                             if str(inner).startswith("nsfw/") else str(inner))
-            meta = lookup_task_meta(row["filename"])
-            parent, tags = classify(row["filename"], meta)   # 取消后重算归属
-            new_inner = Path(parent) / inner.name
+            pre = row["pre_nsfw_path"] or ""
+            if pre:
+                new_rel = Path(pre)
+                new_thumb_rel = _thumb_rel_for(new_rel)
+            else:   # 无原位置记录(如路径规范变更):按分类规则重算
+                meta = lookup_task_meta(row["filename"])
+                parent, _tags = classify(row["filename"], meta)
+                new_rel = Path(lib_name) / parent / row["filename"]
+                new_thumb_rel = Path(lib_name) / "thumbs" / parent / (row["filename"] + ".webp")
         src_file = nas_root() / old_rel
-        dest_dir = _shard_dir(library_dir() / new_inner.parent)
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        dest = dest_dir / row["filename"]
+        dest = nas_root() / new_rel
         if dest.exists():
             if dest.stat().st_size == src_file.stat().st_size:
                 src_file.unlink()
             else:
                 return False, "目标位置存在同名不同内容的图片"
         else:
+            dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(src_file), str(dest))
-        # 路径以 dest_dir 实际位置为准(_shard_dir 满员时会开分片改目录名)
-        new_rel = Path(lib_name) / dest_dir.relative_to(library_dir()) / row["filename"]
         old_thumb = (nas_root() / row["thumb"]) if row["thumb"] else None
-        new_thumb_rel = Path(lib_name) / "thumbs" / dest_dir.relative_to(library_dir()) / (row["filename"] + ".webp")
         if old_thumb and old_thumb.exists():
             nt = nas_root() / new_thumb_rel
             nt.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(old_thumb), str(nt))
+            thumb_val = str(new_thumb_rel)
+        else:
+            thumb_val = ""
         with _lock:
             conn = _lib_connect()
-            conn.execute("UPDATE files SET path=?, thumb=?, nsfw=? WHERE rowid=?",
-                         (str(new_rel),
-                          str(new_thumb_rel) if old_thumb and old_thumb.exists() else row["thumb"],
-                          1 if nsfw else 0, rowid))
+            if nsfw:
+                conn.execute(
+                    "UPDATE files SET path=?, thumb=?, nsfw=1, pre_nsfw_path=? WHERE rowid=?",
+                    (str(new_rel), thumb_val, pre, rowid))
+            else:
+                conn.execute(
+                    "UPDATE files SET path=?, thumb=?, nsfw=0, pre_nsfw_path='' WHERE rowid=?",
+                    (str(new_rel), thumb_val, rowid))
             conn.commit()
     except OSError as e:
         return False, f"移动失败(NAS 不可用?): {e.__class__.__name__}"
