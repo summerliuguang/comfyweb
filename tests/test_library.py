@@ -490,7 +490,7 @@ class TestLibV2(unittest.TestCase):
         self.assertTrue(row["path"].startswith("output/myproj/"))
         self.assertEqual(row["model"], "m1.safetensors")   # 任务元数据增强
         row2 = library.indexed("art_002_.png")
-        self.assertEqual(row2["model"], "myproj")          # 无记录 → 目录名
+        self.assertEqual(row2["model"], "")                # 无记录:目录名只作标签,不再是模型
         self.assertTrue((proj / "art_001_.png").exists())  # 原地不动
         # 无变更再扫:零写入
         self.assertEqual(library.ingest_refresh(), 0)

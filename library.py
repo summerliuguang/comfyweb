@@ -746,6 +746,18 @@ def filter_options():
             return [r[0] for r in conn.execute(
                 f"SELECT DISTINCT {name} FROM files WHERE {name}!=''{hide} ORDER BY 1")]
         opts = {k: col(k) for k in ("model", "workflow", "category", "batch", "lora")}
+    # 并入服务器已安装清单(model_meta):没生成过图的模型/LoRA 也出现在筛选下拉。
+    # basename 归一去重;私密模式关闭时跳过标了私密的
+    open_ = (db.get_setting("private_enabled") or "") == "1"
+    for folder, key in (("checkpoints", "model"), ("loras", "lora")):
+        cond = "" if open_ else " AND nsfw=0"
+        have = {o.rsplit("/", 1)[-1] for o in opts[key]}
+        for r in db.query(f"SELECT filename FROM model_meta WHERE folder=?{cond}", (folder,)):
+            base = r["filename"].rsplit("/", 1)[-1]
+            if base and base not in have:
+                opts[key].append(base)
+                have.add(base)
+        opts[key].sort()
     return opts
 
 
