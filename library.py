@@ -508,9 +508,12 @@ def params_backfill(row):
         conn.execute(
             "UPDATE files SET params_json=?, "
             "prompt=CASE WHEN IFNULL(prompt,'')='' THEN ? ELSE prompt END, "
-            "seed=CASE WHEN COALESCE(seed,'')='' THEN ? ELSE seed END WHERE path=?",
+            "seed=CASE WHEN COALESCE(seed,'')='' THEN ? ELSE seed END, "
+            "model=CASE WHEN IFNULL(model,'')='' THEN ? ELSE model END, "
+            "lora=CASE WHEN IFNULL(lora,'')='' THEN ? ELSE lora END WHERE path=?",
             (json.dumps(params, ensure_ascii=False),
-             params.get("positive") or "", params.get("seed"), row["path"]))
+             params.get("positive") or "", params.get("seed"),
+             params.get("model") or "", params.get("lora") or "", row["path"]))
         conn.commit()
     return True
 
