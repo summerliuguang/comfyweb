@@ -221,6 +221,33 @@ class TestEmbeddedParams(unittest.TestCase):
         self.assertEqual(params["model"], "anima_v11.safetensors")
         self.assertEqual(params["lora"], "detail.safetensors")
 
+    def test_unet_loader_model(self):
+        """UNETLoader 系工作流(flux/z-image):底模取 unet_name;
+        UpscaleModelLoader 的 model_name 是放大模型,不得误当底模。"""
+        from PIL import Image, PngImagePlugin
+        nodes = {
+            "1": {"class_type": "UNETLoader",
+                  "inputs": {"unet_name": "z-image-turbo-fp8-e4m3fn.safetensors",
+                             "weight_dtype": "default"}},
+            "2": {"class_type": "UpscaleModelLoader",
+                  "inputs": {"model_name": "4x-UltraSharp.pth"}},
+            "3": {"class_type": "CLIPTextEncode", "inputs": {"text": "a cat"}},
+            "4": {"class_type": "KSampler", "inputs": {"seed": 5, "sampler_name": "euler",
+                  "positive": ["3", 0], "negative": ["3", 0]}},
+        }
+        meta = PngImagePlugin.PngInfo()
+        meta.add_text("prompt", json.dumps(nodes))
+        src = Path(tempfile.mkdtemp()) / "unet_001_.png"
+        _make_png(src)
+        with Image.open(src) as im:
+            im.save(src, pnginfo=meta)
+        library.place(src, "unet_001_.png")
+        library.params_backfill(library.indexed("unet_001_.png"))
+        row = library.indexed("unet_001_.png")
+        self.assertEqual(row["model"], "z-image-turbo-fp8-e4m3fn.safetensors")
+        params = json.loads(row["params_json"])
+        self.assertNotIn("4x-UltraSharp", params.get("model", ""))
+
     def test_conditioning_wrap_traversed(self):
         """正面经 conditioning 包装节点:穿透找到文本,不落入兜底。"""
         from PIL import Image, PngImagePlugin

@@ -480,9 +480,15 @@ def parse_png_params(path):
             t = _chunk_text(ins.get("text"), nodes)
             if t:
                 clip_texts.append(t)
-        if ct.startswith("CheckpointLoader") and isinstance(ins.get("ckpt_name"), str):
-            out.setdefault("model", ins["ckpt_name"])
-        if isinstance(ins.get("lora_name"), str):
+        # 底模加载器:CheckpointLoader* 用 ckpt_name,UNETLoader 系(flux/z-image 等)
+        # 用 unet_name;UpscaleModelLoader 等的 model_name 是放大模型,不当作底模
+        ct_l = ct.lower()
+        if "loader" in ct_l:
+            if ct_l.startswith("checkpointloader") and ins.get("ckpt_name"):
+                out.setdefault("model", ins["ckpt_name"])
+            elif "unet" in ct_l and ins.get("unet_name"):
+                out.setdefault("model", ins["unet_name"])
+        if ins.get("lora_name"):
             out.setdefault("lora", ins["lora_name"])
     # 引用链没追到文本时(复杂图结构),拿最长的非负面特征 CLIP 文本兜底——
     # 负面提示词(如 "worst quality, low quality, ...")往往比正面还长,必须先排除
