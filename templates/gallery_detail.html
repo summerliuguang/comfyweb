@@ -56,6 +56,22 @@
     localStorage.setItem('comfyweb.viewerbg', light ? 'light' : 'dark');
   });
 
+  /* 「‹ 画廊」:确实是从画廊点进来时走 history.back,配合画廊页恢复浏览位置;
+     直接打开/过期状态则回落到链接本身的 /gallery?qs */
+  (function () {
+    const back = document.querySelector('.v-top .vchip');
+    if (!back) return;
+    back.addEventListener('click', (e) => {
+      let st = null;
+      try { st = JSON.parse(sessionStorage.getItem('comfyweb.gstate') || 'null'); } catch (err) {}
+      if (st && st.qs === qs && Date.now() - (st.t || 0) < 3600e3 && history.length > 1) {
+        e.preventDefault();
+        sessionStorage.setItem('comfyweb.gback', '1');
+        history.back();
+      }
+    });
+  })();
+
   /* 首尾提示 toast */
   const toastEl = document.getElementById('vToast');
   let toastTimer = null;
@@ -258,6 +274,11 @@
     syncArrows();
     syncFav();
     history.replaceState(null, '', `/gallery/view/${it.rid}` + (qs ? '?' + qs : ''));
+    /* 画廊保存的浏览状态里记下当前图,返回画廊时优先定位到这张 */
+    try {
+      const st = JSON.parse(sessionStorage.getItem('comfyweb.gstate') || 'null');
+      if (st) { st.lastRid = it.rid; sessionStorage.setItem('comfyweb.gstate', JSON.stringify(st)); }
+    } catch (e) {}
     renderSheetBody(it);
     preload();
   }

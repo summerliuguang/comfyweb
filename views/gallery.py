@@ -109,7 +109,7 @@ def page_gallery():
     qs = urlencode(filt)
     return render_template("gallery.html", items=items, q=cur.get("q", ""), page=page, pages=pages,
                            total=total, opts=opts, cur=cur, ranges=GALLERY_RANGES,
-                           qs=qs, active="gallery")
+                           qs=qs, per_page=PAGE_SIZE, active="gallery")
 
 
 @bp.get("/api/gallery/image/<int:img_id>/params")

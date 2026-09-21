@@ -208,6 +208,13 @@ details.adv[open]>summary::before{transform:rotate(90deg)}
 .lightbox.lb-light .lb-bg{background:rgba(20,24,34,.1)}
 .lightbox.lb-light .lb-count,.lightbox.lb-light .lb-cap{color:#444}
 .lightbox.lb-light .lb-hint{color:#7a8194}
+/* 灯箱可选操作按钮(批量选择模式传入 onAction 即显示):底部中央就地点选 */
+.lightbox .lb-act{position:absolute;bottom:3.2rem;left:50%;transform:translateX(-50%);z-index:2;
+  border:none;border-radius:999px;padding:.62rem 1.7rem;font-size:.9rem;cursor:pointer;
+  background:rgba(255,255,255,.2);color:#fff;backdrop-filter:blur(6px);min-height:40px}
+.lightbox .lb-act.on{background:var(--primary);color:#fff}
+.lightbox.lb-light .lb-act{background:rgba(20,24,34,.16);color:#222}
+.lightbox.lb-light .lb-act.on{background:var(--primary);color:#fff}
 
 /* 状态圆点(状态文字复用 skin.css 的 .status) */
 .dot-queued::before{background:var(--warn)!important}
@@ -255,17 +262,32 @@ details.adv[open]>summary::before{transform:rotate(90deg)}
 .gitem .sel-mark{display:none;position:absolute;top:.35rem;left:.35rem;z-index:3;
   width:1.5rem;height:1.5rem;border-radius:50%;border:2px solid #fff;
   background:rgba(20,22,30,.45);align-items:center;justify-content:center}
+/* ::before 扩触控热区到 ~42px(手机端圈圈小难点,fav-btn 同款手法) */
+.gitem .sel-mark::before{content:'';position:absolute;inset:-9px;border-radius:50%}
 .gitem.sel .sel-mark{background:var(--primary);border-color:var(--primary)}
 .gitem.sel .sel-mark::after{content:'✓';color:#fff;font-size:.9rem;font-weight:700}
 .gitem.sel{outline:3px solid var(--primary);outline-offset:-3px}
 body.batch-mode .gitem{cursor:pointer}
 body.batch-mode .gitem .sel-mark{display:flex}
 body.batch-mode .gitem .fav-btn{display:none}
-.batch-bar{display:none;position:fixed;left:0;right:0;
-  bottom:env(safe-area-inset-bottom);z-index:1100;align-items:center;justify-content:center;
-  gap:.6rem;padding:.7rem .8rem;background:var(--card);border-top:1px solid var(--line);
-  flex-wrap:wrap;box-shadow:0 -4px 16px rgba(20,24,40,.12)}
-.batch-bar.on{display:flex}
+/* 画廊底部固定栏:位置/页码指示 + 批量选择入口;选择态切换为批量操作行 */
+.gallery-dock{position:fixed;left:0;right:0;bottom:0;z-index:1100;
+  padding:.5rem .8rem calc(.5rem + env(safe-area-inset-bottom));
+  background:var(--card);border-top:1px solid var(--line);
+  box-shadow:0 -4px 16px rgba(20,24,40,.10)}
+.gallery-dock .dock-row{display:flex;align-items:center;gap:.5rem;max-width:960px;margin:0 auto}
+.gallery-dock .dock-pos{font-size:.82rem;color:var(--muted);font-variant-numeric:tabular-nums;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gallery-dock .dock-spacer{flex:1}
+.gallery-dock .dock-btn{margin-left:auto;flex:none}
+/* 手机端按钮加大触控高度 */
+@media(max-width:899px){
+  .gallery-dock .button{min-height:40px}
+}
+/* 有底部栏的页面(画廊)预留高度,内容尾部不被遮挡 */
+body:has(.gallery-dock) .wrap{padding-bottom:5.2rem}
+/* 批量预览(灯箱)打开时隐藏底部栏,保持全屏沉浸 */
+body:has(.lightbox:not([hidden])) .gallery-dock{display:none}
 
 /* 长按防系统菜单/文字选中 */
 body.batch-mode .gitem, .gitem{-webkit-touch-callout:none;user-select:none}

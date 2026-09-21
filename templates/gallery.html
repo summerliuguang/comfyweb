@@ -48,7 +48,6 @@
       {% endfor %}
     </select>
     <button class="button is-small is-link" type="submit">筛选</button>
-    <button class="button is-small" type="button" id="btnBatchMode">批量选择</button>
     {% if q or cur.get('wf') or cur.get('model') or cur.get('lora') or cur.get('cat') or cur.get('batch') or cur.get('range') in ('today', '7d', '30d') %}
     <a class="button is-small is-light" href="/gallery">清除</a>
     {% endif %}
@@ -61,7 +60,8 @@
   {% else %}
   <div class="masonry">
     {% for it in items %}
-    <a class="gitem" href="/gallery/view/{{ it.rowid }}{% if qs %}?{{ qs }}{% endif %}">
+    <a class="gitem" href="/gallery/view/{{ it.rowid }}{% if qs %}?{{ qs }}{% endif %}"
+       data-rid="{{ it.rowid }}" data-pos="{{ loop.index }}">
       <img src="{{ it.thumb }}" loading="lazy" alt="图片">
       <span class="sel-mark" aria-hidden="true"></span>
       {% if it.task_img_id %}
@@ -71,12 +71,6 @@
       <div class="gmeta" title="{{ it.label }}">{{ it.label or '(未分类)' }}</div>
     </a>
     {% endfor %}
-  </div>
-  <div class="batch-bar" id="batchBar">
-    <span class="status" id="batchCount">已选 0 张</span>
-    <button class="button is-small is-warning" id="btnBatchNsfw">设为私密</button>
-    <button class="button is-small is-danger" id="btnBatchDel">删除</button>
-    <button class="button is-small" id="btnBatchCancel">取消选择</button>
   </div>
   {% if pages > 1 %}
   <div class="pager">
@@ -89,14 +83,31 @@
   {% endif %}
   {% endif %}
 </div>
+
+{% if items %}
+<div class="gallery-dock" id="galleryDock">
+  <div class="dock-row" id="dockNormal">
+    <span class="dock-pos" id="dockPos"></span>
+    <button class="button is-small is-link dock-btn" id="btnBatchMode" type="button">批量选择</button>
+  </div>
+  <div class="dock-row" id="dockBatch" hidden>
+    <span class="dock-pos" id="batchCount">已选 0 张</span>
+    <span class="dock-spacer"></span>
+    <button class="button is-small" id="btnBatchCancel" type="button">取消</button>
+    <button class="button is-small is-warning" id="btnBatchNsfw" type="button">私密</button>
+    <button class="button is-small is-danger" id="btnBatchDel" type="button">删除</button>
+  </div>
+</div>
+{% endif %}
 {% endblock %}
 {% block scripts %}
 {% if items %}
+<script src="/static/js/lightbox.js"></script>
 <script>
 const FAV_ON = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" stroke="none" aria-hidden="true"><path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.6 9.7l5.8-.8z"/></svg>';
 const FAV_OFF = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.6 9.7l5.8-.8z"/></svg>';
 /* 收藏切换:事件委托(卡片是 <a>,点星标要拦住跳转) */
-/* ---------- 批量选择(勾选后批量删除/设为私密) ---------- */
+/* ---------- 批量选择(入口:底部固定栏按钮/长按卡片) ---------- */
 let batchMode = false;
 const batchSel = new Set();
 
@@ -107,7 +118,10 @@ function updateBatchCount() {
 function setBatchMode(on) {
   batchMode = on;
   document.body.classList.toggle('batch-mode', on);
-  document.getElementById('batchBar').classList.toggle('on', on);
+  const normal = document.getElementById('dockNormal');
+  const batch = document.getElementById('dockBatch');
+  if (normal) normal.hidden = on;
+  if (batch) batch.hidden = !on;
   if (!on) {
     batchSel.clear();
     document.querySelectorAll('.gitem.sel').forEach(el => el.classList.remove('sel'));
@@ -115,35 +129,51 @@ function setBatchMode(on) {
   updateBatchCount();
 }
 
-function toggleSel(card) {
-  const rid = parseInt(card.getAttribute('href').split('/').pop().split('?')[0], 10);
-  if (batchSel.has(rid)) { batchSel.delete(rid); card.classList.remove('sel'); }
-  else { batchSel.add(rid); card.classList.add('sel'); }
+function applySel(card, state) {
+  const rid = parseInt(card.dataset.rid, 10);
+  card.classList.toggle('sel', state);
+  if (state) batchSel.add(rid); else batchSel.delete(rid);
   updateBatchCount();
+}
+
+function toggleSel(card) {
+  applySel(card, !card.classList.contains('sel'));
 }
 
 document.getElementById('btnBatchMode').addEventListener('click', () => setBatchMode(!batchMode));
 
-/* 长按卡片 500ms 触发批量选择(移动端主要入口;桌面按住同样可用) */
+/* 长按卡片 500ms 进入选择;不松手继续滑动即沿途连选(选择模式下长按拖动同样连选) */
 let lpTimer = 0, lpFired = false, lpStart = null, lpCard = null;
+let dragState = null;   // 拖选激活:{ state } —— 沿途卡片统一设为该勾选状态
 const masonryEl = document.querySelector('.masonry');
 masonryEl.addEventListener('pointerdown', (e) => {
-  if (batchMode || lpTimer) return;
+  if (lpTimer || dragState) return;
   const card = e.target.closest('.gitem');
-  if (!card) return;
+  if (!card || e.target.closest('.sel-mark')) return;   // 圈圈有自己的点击勾选
   lpCard = card;
   lpStart = { x: e.clientX, y: e.clientY };
   lpFired = false;
   lpTimer = setTimeout(() => {
     lpTimer = 0;
     lpFired = true;
-    setBatchMode(true);
-    if (lpCard) toggleSel(lpCard);
+    if (!batchMode) setBatchMode(true);
+    dragState = { state: !lpCard.classList.contains('sel') };
+    applySel(lpCard, dragState.state);
     if (navigator.vibrate) navigator.vibrate(40);
   }, 500);
 });
 ['pointermove', 'pointerup', 'pointercancel'].forEach(ev =>
   masonryEl.addEventListener(ev, (e) => {
+    if (dragState) {
+      if (ev === 'pointermove') {
+        const el = document.elementFromPoint(e.clientX, e.clientY);
+        const card = el && el.closest('.gitem');
+        if (card) applySel(card, dragState.state);
+      } else {
+        dragState = null;
+      }
+      return;
+    }
     if (!lpTimer) return;
     if (ev === 'pointermove' && lpStart &&
         Math.hypot(e.clientX - lpStart.x, e.clientY - lpStart.y) > 12) {
@@ -152,6 +182,10 @@ masonryEl.addEventListener('pointerdown', (e) => {
     }
     if (ev !== 'pointermove') { clearTimeout(lpTimer); lpTimer = 0; }
   }));
+/* 拖选期间拦掉触摸滚动(滚动由 touchmove 决定,pointermove 的 preventDefault 管不住) */
+masonryEl.addEventListener('touchmove', (e) => {
+  if (dragState) e.preventDefault();
+}, { passive: false });
 masonryEl.addEventListener('contextmenu', (e) => {
   if (batchMode || lpFired || lpTimer) { e.preventDefault(); }   // 长按不弹系统菜单
 });
@@ -183,12 +217,44 @@ async function batchAct(action, nsfw) {
 document.getElementById('btnBatchDel').addEventListener('click', () => batchAct('delete'));
 document.getElementById('btnBatchNsfw').addEventListener('click', () => batchAct('private', true));
 
+/* 批量模式大图预览:灯箱浏览已加载的图片,底部按钮就地勾/取消;关闭回到原位 */
+function openBatchPreview(card) {
+  const cards = [...document.querySelectorAll('.gitem')];
+  const list = cards.map(c => ({
+    url: '/libmedia/' + c.dataset.rid,
+    rid: c.dataset.rid,
+  }));
+  const syncBtn = (i) => {
+    const btn = document.querySelector('.lb-act');   // 首次 open 时才创建,故现查
+    if (!btn) return;
+    const on = batchSel.has(parseInt(list[i].rid, 10));
+    btn.textContent = on ? '✓ 已选中' : '选中';
+    btn.classList.toggle('on', on);
+  };
+  Lightbox.open(list, cards.indexOf(card), {
+    onShow: syncBtn,
+    onAction: (i) => {
+      const c = cards[i];
+      if (c) applySel(c, !c.classList.contains('sel'));
+      syncBtn(i);
+    },
+  });
+}
+
 document.querySelector('.masonry').addEventListener('click', async (e) => {
   if (lpFired) { e.preventDefault(); lpFired = false; return; }   // 长按已处理,吞掉紧随的点击
   if (batchMode) {
     const card = e.target.closest('.gitem');
-    if (card) { e.preventDefault(); toggleSel(card); }
-    return;   // 选择模式下点收藏角标也视为勾选
+    if (card) {
+      e.preventDefault();
+      if (e.target.closest('.sel-mark')) toggleSel(card);   // 圈圈=勾选
+      else openBatchPreview(card);                          // 图片区域=看大图
+    }
+    return;
+  }
+  if (e.target.closest('.gitem')) {
+    window.__saveGalleryState && window.__saveGalleryState();   // 进详情前存位置,返回时恢复
+    return;   // 不拦截,让 <a> 正常跳转
   }
   const btn = e.target.closest('.fav-btn');
   if (!btn) return;
@@ -221,6 +287,7 @@ document.querySelector('.masonry').addEventListener('click', async (e) => {
     const cols = colCount();
     const colW = Math.floor((wrap.clientWidth - GAP * (cols - 1)) / cols);
     const heights = Array(cols).fill(0);
+    posTops = [];
     for (const it of items) {
       it.style.width = colW + 'px';
       const img = it.querySelector('img');
@@ -230,11 +297,22 @@ document.querySelector('.masonry').addEventListener('click', async (e) => {
       const cap = it.querySelector('.gmeta');
       const h = ih + (cap ? cap.offsetHeight : 26);
       const c = heights.indexOf(Math.min(...heights));
+      posTops.push(heights[c]);
       it.style.transform = `translate(${c * (colW + GAP)}px, ${heights[c]}px)`;
       heights[c] += Math.round(h) + GAP;
     }
     wrap.style.height = Math.max(...heights) + 'px';
   }
+  let posTops = [];   // 与 items 对齐:每张卡片的纵向起点(layout 时更新)
+
+  /* 视口上沿当前落在第几张(pos:1-based;供底部栏位置指示与返回恢复) */
+  window.__posAtY = function (y) {
+    let best = -1, bestY = -1;
+    for (let i = 0; i < items.length; i++) {
+      if (posTops[i] <= y && posTops[i] > bestY) { bestY = posTops[i]; best = i; }
+    }
+    return best >= 0 ? parseInt(items[best].dataset.pos, 10) : null;
+  };
 
   function bindLoad(els) {
     for (const it of els) {
@@ -265,19 +343,25 @@ document.querySelector('.masonry').addEventListener('click', async (e) => {
 })();
 </script>
 <script>
-/* 无限滚动:底部哨兵进入视口即追加下一页;页码跳转则整页定位 */
+/* 无限滚动 + 底部栏位置指示 + 返回恢复浏览位置。
+   状态存 sessionStorage(comfyweb.gstate):点卡片进详情前/滚动节流时保存
+   {qs, page, scrollY};详情页返回时置 comfyweb.gback 标记,这里检测后补页恢复。 */
 (function () {
   const qs = {{ qs | tojson }};
+  const PER = {{ per_page }};
+  const GKEY = 'comfyweb.gstate', BKEY = 'comfyweb.gback';
   let page = {{ page }}, pages = {{ pages }};
   let VIEW_TOTAL = {{ total }};   // 批量删除/隐藏后原地递减(原 const TOTAL)
   const sentinel = document.getElementById('sentinel');
   const info = document.getElementById('pageInfo');
   let loading = false;
 
-  function makeCard(it) {
+  function makeCard(it, pos) {
     const a = document.createElement('a');
     a.className = 'gitem';
     a.href = '/gallery/view/' + it.rowid + (qs ? '?' + qs : '');
+    a.dataset.rid = it.rowid;
+    a.dataset.pos = pos;
     const img = document.createElement('img');
     img.src = it.thumb;
     img.loading = 'lazy';
@@ -308,28 +392,48 @@ document.querySelector('.masonry').addEventListener('click', async (e) => {
     if (!info) return;   // 单页结果(pages<=1)时 pageInfo 未渲染
     info.textContent = `已加载第 ${page} / ${pages} 页 · 共 ${VIEW_TOTAL} 张`;
   }
+  function updateDock() {
+    const el = document.getElementById('dockPos');
+    if (!el) return;
+    const pos = window.__posAtY && window.__posAtY(scrollY + innerHeight * 0.35);
+    el.textContent = (pos ? `第 ${pos} / ${VIEW_TOTAL} 张` : `共 ${VIEW_TOTAL} 张`) + ` · ${page}/${pages} 页`;
+  }
+  function saveState() {
+    try {
+      sessionStorage.setItem(GKEY, JSON.stringify(
+        { qs, page, scrollY: Math.round(scrollY), t: Date.now() }));
+    } catch (e) { /* 隐私模式等存不进就算了 */ }
+  }
+  window.__saveGalleryState = saveState;
+
   window.__viewTotalDelta = function (delta) {
     VIEW_TOTAL -= delta;
     const tag = document.querySelector('.page-head .tag');
     if (tag) tag.textContent = `${VIEW_TOTAL} 张`;
     updateInfo();
+    updateDock();
   };
+
+  async function fetchPage(p) {
+    const u = new URL('/api/gallery/items', location.origin);
+    if (qs) u.search = '?' + qs;
+    u.searchParams.set('page', p);
+    const r = await fetch(u);
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || r.status);
+    page = d.page;
+    window.__masonryAdd(d.items.map((it, i) => makeCard(it, (d.page - 1) * PER + i + 1)));
+    updateInfo();
+    sentinel.textContent = page >= pages ? '已全部加载' : '上拉加载更多';
+  }
 
   async function loadNext() {
     if (loading || page >= pages) return;
     loading = true;
     sentinel.textContent = '加载中…';
     try {
-      const u = new URL('/api/gallery/items', location.origin);
-      if (qs) u.search = '?' + qs;
-      u.searchParams.set('page', page + 1);
-      const r = await fetch(u);
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error || r.status);
-      page = d.page;
-      window.__masonryAdd(d.items.map(makeCard));
-      updateInfo();
-      sentinel.textContent = page >= pages ? '已全部加载' : '上拉加载更多';
+      await fetchPage(page + 1);
+      saveState();
     } catch (e) {
       // 保留错误文案;unobserve→observe 重新触发交叉判定,继续上拉即可重试
       sentinel.textContent = `加载失败: ${e.message}(继续上拉重试)`;
@@ -338,6 +442,47 @@ document.querySelector('.masonry').addEventListener('click', async (e) => {
     }
     loading = false;
   }
+
+  /* ---- 返回恢复:详情页置 gback 标记后 back,这里补页并滚回原位 ---- */
+  addEventListener('pageshow', (e) => {
+    if (e.persisted) sessionStorage.removeItem(BKEY);   // bfcache 原样恢复,标记作废
+  });
+  function ridCard(rid) {
+    return rid ? document.querySelector(`.gitem[data-rid="${rid}"]`) : null;
+  }
+  function tryRestore() {
+    if (sessionStorage.getItem(BKEY) !== '1') return;
+    sessionStorage.removeItem(BKEY);
+    let saved = null;
+    try { saved = JSON.parse(sessionStorage.getItem(GKEY) || 'null'); } catch (e) {}
+    if (!saved || saved.qs !== qs) return;
+    sessionStorage.removeItem(GKEY);
+    const show = () => {
+      const card = ridCard(saved.lastRid);
+      if (card) card.scrollIntoView({ block: 'center' });
+      else scrollTo(0, saved.scrollY || 0);
+      updateDock();
+    };
+    const target = Math.min(saved.page || 1, pages);
+    if (target <= page) {   // 只渲染过一页或更少:现有卡片里定位即可
+      if (saved.scrollY || saved.lastRid) requestAnimationFrame(show);
+      return;
+    }
+    loading = true;
+    sentinel.textContent = '恢复上次浏览位置…';
+    (async () => {
+      try {
+        for (let p = page + 1; p <= target; p++) await fetchPage(p);
+        requestAnimationFrame(show);
+        // 图片陆续加载会触发重排推移位置,稳定后再校正一次
+        setTimeout(() => { show(); loading = false; saveState(); }, 400);
+      } catch (e) {
+        loading = false;
+        sentinel.textContent = '恢复未完成,继续上拉可接着加载';
+      }
+    })();
+  }
+  tryRestore();
 
   const io = sentinel ? new IntersectionObserver((es) => {
     if (es.some(e => e.isIntersecting)) loadNext();
@@ -354,6 +499,12 @@ document.querySelector('.masonry').addEventListener('click', async (e) => {
     if (e.key === 'Enter') { e.preventDefault(); btnJump.click(); }
   });
   updateInfo();
+  updateDock();
+  let scrollTimer = 0;
+  addEventListener('scroll', () => {
+    clearTimeout(scrollTimer);
+    scrollTimer = setTimeout(() => { updateDock(); saveState(); }, 200);
+  }, { passive: true });
 })();
 </script>
 {% endif %}

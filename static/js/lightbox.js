@@ -1,11 +1,13 @@
 /* 通用灯箱:浏览模式(上下滑动/滚轮/方向键切换图片) + 聚焦模式(捏合/滚轮缩放、拖动平移)。
- * 用法:Lightbox.open([{url, thumb, caption?}, ...], startIndex, {caption?})
+ * 用法:Lightbox.open([{url, thumb, caption?}, ...], startIndex,
+ *                     {onIdxChange?, onShow?, onAction?})
+ * onShow(i)/onAction(i):可选底部操作按钮——传入 onAction 即显示,show/点击时回调。
  */
 (function () {
   const SWIPE_PX = 48;
 
-  let root = null, imgEl = null, cntEl = null, capEl = null, hintEl = null;
-  let imgs = [], idx = 0, mode = 'browse', onIdxChange = null;
+  let root = null, imgEl = null, cntEl = null, capEl = null, hintEl = null, actEl = null;
+  let imgs = [], idx = 0, mode = 'browse', onIdxChange = null, onShow = null, onAction = null;
   let scale = 1, tx = 0, ty = 0;
   let pointers = new Map();   // pointerId -> {x,y}
   let startDist = 0, startScale = 1;
@@ -22,12 +24,14 @@
       '<span class="lb-count"></span>' +
       '<div class="lb-stage"><img class="lb-img" alt=""></div>' +
       '<div class="lb-cap"></div>' +
+      '<button class="lb-act" type="button" hidden></button>' +
       '<div class="lb-hint"></div>';
     document.body.appendChild(root);
     imgEl = root.querySelector('.lb-img');
     cntEl = root.querySelector('.lb-count');
     capEl = root.querySelector('.lb-cap');
     hintEl = root.querySelector('.lb-hint');
+    actEl = root.querySelector('.lb-act');
     if (localStorage.getItem('comfyweb.viewerbg') === 'light') {
       root.classList.add('lb-light');
     }
@@ -67,6 +71,7 @@
     capEl.textContent = cap.length > 80 ? cap.slice(0, 80) + '…' : cap;
     capEl.hidden = !cap;
     setMode('browse');
+    if (onShow) onShow(idx);
   }
 
   function step(d) {
@@ -79,7 +84,10 @@
     if (!list || !list.length) return;
     imgs = list;
     onIdxChange = (opts && opts.onIdxChange) || null;
+    onShow = (opts && opts.onShow) || null;
+    onAction = (opts && opts.onAction) || null;
     ensure();
+    if (actEl) actEl.hidden = !onAction;
     show(Math.max(0, Math.min(start || 0, list.length - 1)));
     root.hidden = false;
     document.body.style.overflow = 'hidden';
@@ -98,6 +106,7 @@
 
   function bind() {
     root.querySelector('.lb-close').addEventListener('click', close);
+    actEl.addEventListener('click', () => { if (onAction) onAction(idx); });
 
     let wheelLock = 0;   // 触控板一格滚动会连发多个 wheel,不加锁一次跳好几张
     root.addEventListener('wheel', (e) => {
