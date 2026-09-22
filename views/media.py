@@ -14,7 +14,7 @@ from flask import Blueprint, Response, redirect, request
 
 from comfy_client import ComfyError, client
 
-from views.helpers import err, img_cache_get, img_cache_store
+from views.helpers import err, img_cache_get, img_cache_store, private_open
 
 bp = Blueprint("media", __name__)
 
@@ -167,7 +167,6 @@ def lib_thumb(rowid):
 def lib_media(rowid):
     """整理库原图(查看/下载)。"""
     import library
-    from views.helpers import private_open
     row = library.get(rowid)
     if not row or (row["nsfw"] and not private_open()):
         return err("图片不存在", 404)
