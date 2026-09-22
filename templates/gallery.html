@@ -61,7 +61,7 @@
   <div class="masonry">
     {% for it in items %}
     <a class="gitem" href="/gallery/view/{{ it.rowid }}{% if qs %}?{{ qs }}{% endif %}"
-       data-rid="{{ it.rowid }}" data-pos="{{ loop.index }}">
+       data-rid="{{ it.rowid }}" data-pos="{{ (page - 1) * per_page + loop.index }}">
       <img src="{{ it.thumb }}" loading="lazy" alt="图片">
       <span class="sel-mark" aria-hidden="true"></span>
       {% if it.task_img_id %}
@@ -73,12 +73,6 @@
     {% endfor %}
   </div>
   {% if pages > 1 %}
-  <div class="pager">
-    <span id="pageInfo">已加载第 {{ page }} / {{ pages }} 页 · 共 {{ total }} 张</span>
-    <input class="input is-small" id="jumpInput" type="number" min="1" max="{{ pages }}"
-           value="{{ page }}" style="width:5rem" aria-label="页码">
-    <button class="button is-small" id="btnJump" type="button">跳转</button>
-  </div>
   <div id="sentinel" style="padding:1rem 0;text-align:center;color:#8a90a0;font-size:.85rem">上拉加载更多</div>
   {% endif %}
   {% endif %}
@@ -87,8 +81,20 @@
 {% if items %}
 <div class="gallery-dock" id="galleryDock">
   <div class="dock-row" id="dockNormal">
+    {% if pages > 1 %}
+    <button class="dock-nav" id="btnPrevPage" type="button" title="上一页" aria-label="上一页">‹</button>
+    <button class="dock-pageinfo" id="dockPage" type="button" title="跳到指定页">{{ page }}/{{ pages }} 页</button>
+    <button class="dock-nav" id="btnNextPage" type="button" title="下一页" aria-label="下一页">›</button>
+    {% endif %}
     <span class="dock-pos" id="dockPos"></span>
     <button class="button is-small is-link dock-btn" id="btnBatchMode" type="button">批量选择</button>
+    {% if pages > 1 %}
+    <div class="dock-jump" id="dockJump" hidden>
+      <input class="input is-small" id="jumpInput" type="number" min="1" max="{{ pages }}"
+             value="{{ page }}" aria-label="页码">
+      <button class="button is-small is-link" id="btnJump" type="button">跳转</button>
+    </div>
+    {% endif %}
   </div>
   <div class="dock-row" id="dockBatch" hidden>
     <span class="dock-pos" id="batchCount">已选 0 张</span>
@@ -353,7 +359,6 @@ document.querySelector('.masonry').addEventListener('click', async (e) => {
   let page = {{ page }}, pages = {{ pages }};
   let VIEW_TOTAL = {{ total }};   // 批量删除/隐藏后原地递减(原 const TOTAL)
   const sentinel = document.getElementById('sentinel');
-  const info = document.getElementById('pageInfo');
   let loading = false;
 
   function makeCard(it, pos) {
@@ -388,15 +393,23 @@ document.querySelector('.masonry').addEventListener('click', async (e) => {
     return a;
   }
 
-  function updateInfo() {
-    if (!info) return;   // 单页结果(pages<=1)时 pageInfo 未渲染
-    info.textContent = `已加载第 ${page} / ${pages} 页 · 共 ${VIEW_TOTAL} 张`;
-  }
   function updateDock() {
     const el = document.getElementById('dockPos');
-    if (!el) return;
-    const pos = window.__posAtY && window.__posAtY(scrollY + innerHeight * 0.35);
-    el.textContent = (pos ? `第 ${pos} / ${VIEW_TOTAL} 张` : `共 ${VIEW_TOTAL} 张`) + ` · ${page}/${pages} 页`;
+    if (el) {
+      const pos = window.__posAtY && window.__posAtY(scrollY + innerHeight * 0.35);
+      el.textContent = pos ? `第 ${pos} / ${VIEW_TOTAL} 张` : `共 ${VIEW_TOTAL} 张`;
+    }
+    const pg = document.getElementById('dockPage');
+    if (pg) pg.textContent = `${page}/${pages} 页`;
+    const prev = document.getElementById('btnPrevPage');
+    if (prev) prev.disabled = page <= 1;
+    const next = document.getElementById('btnNextPage');
+    if (next) next.disabled = page >= pages;
+  }
+  /* 翻页/跳页:整页加载目标页(主动切页,不恢复旧位置) */
+  function gotoPage(p) {
+    p = Math.max(1, Math.min(pages, p));
+    location.href = '/gallery?page=' + p + (qs ? '&' + qs : '');
   }
   function saveState() {
     try {
@@ -410,7 +423,6 @@ document.querySelector('.masonry').addEventListener('click', async (e) => {
     VIEW_TOTAL -= delta;
     const tag = document.querySelector('.page-head .tag');
     if (tag) tag.textContent = `${VIEW_TOTAL} 张`;
-    updateInfo();
     updateDock();
   };
 
@@ -423,7 +435,6 @@ document.querySelector('.masonry').addEventListener('click', async (e) => {
     if (!r.ok) throw new Error(d.error || r.status);
     page = d.page;
     window.__masonryAdd(d.items.map((it, i) => makeCard(it, (d.page - 1) * PER + i + 1)));
-    updateInfo();
     sentinel.textContent = page >= pages ? '已全部加载' : '上拉加载更多';
   }
 
@@ -489,16 +500,25 @@ document.querySelector('.masonry').addEventListener('click', async (e) => {
   }, { rootMargin: '400px' }) : null;
   if (io) io.observe(sentinel);
   const btnJump = document.getElementById('btnJump');
+  const jumpPanel = document.getElementById('dockJump');
   if (btnJump) btnJump.addEventListener('click', () => {
     const v = parseInt(document.getElementById('jumpInput').value, 10);
     if (!v || v < 1 || v > pages) return;
-    location.href = '/gallery?page=' + v + (qs ? '&' + qs : '');
+    gotoPage(v);
   });
   const ji = document.getElementById('jumpInput');
   if (ji) ji.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); btnJump.click(); }
   });
-  updateInfo();
+  const dockPage = document.getElementById('dockPage');
+  if (dockPage) dockPage.addEventListener('click', () => {
+    jumpPanel.hidden = !jumpPanel.hidden;
+    if (!jumpPanel.hidden) { ji.value = page; ji.focus(); ji.select(); }
+  });
+  const btnPrev = document.getElementById('btnPrevPage');
+  if (btnPrev) btnPrev.addEventListener('click', () => gotoPage(page - 1));
+  const btnNext = document.getElementById('btnNextPage');
+  if (btnNext) btnNext.addEventListener('click', () => gotoPage(page + 1));
   updateDock();
   let scrollTimer = 0;
   addEventListener('scroll', () => {
