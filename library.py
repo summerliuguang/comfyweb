@@ -38,13 +38,13 @@ _lock = threading.Lock()   # 索引库串行写(收编线程 + 管理端点)
 
 
 def library_dir() -> Path:
-    """整理库根目录(设置 library_dir;默认 servershare 的 comfyui/library)。"""
+    """整理库根目录(设置 library_dir;默认本地 data/library,可改 NAS/网络路径)。"""
     raw = (db.get_setting("library_dir") or "").strip()
     if raw:
         p = Path(raw).expanduser()
         if p.is_absolute():
             return p
-    return Path.home() / "servershare" / "comfyui" / "library"
+    return db.DATA_DIR / "library"
 
 
 def output_dir() -> Path:

@@ -58,14 +58,14 @@ def api_save_settings():
             import os as _os
             p = _os.path.expanduser(raw)
             if not _os.path.isabs(raw):
-                return err("整理库目录必须是绝对路径(留空则用默认 servershare/comfyui/library)")
+                return err("整理库目录必须是绝对路径(留空则用默认本地 data/library)")
             try:
                 _os.makedirs(p, exist_ok=True)
             except OSError as e:
                 return err(f"目录不可创建: {e}")
             db.set_setting("library_dir", raw)
         else:
-            db.set_setting("library_dir", "")  # 空 = 默认 ~/servershare/comfyui/library
+            db.set_setting("library_dir", "")  # 空 = 默认本地 data/library
         try:
             import storage
             storage.trigger_sync()
