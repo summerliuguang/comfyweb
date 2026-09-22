@@ -44,6 +44,15 @@ def _gallery_filter():
         cur["range"] = rng
     if not private_open():
         conds.append("nsfw=0")   # 私密模式关闭:过滤 NSFW 内容
+    else:
+        # 私密模式开启:内容筛选(全部/仅私密/仅普通;缺省全部)
+        nsfw = request.args.get("nsfw", "").strip()
+        if nsfw == "1":
+            conds.append("nsfw=1")
+            cur["nsfw"] = nsfw
+        elif nsfw == "0":
+            conds.append("nsfw=0")
+            cur["nsfw"] = nsfw
     where = (" AND ".join(conds)) if conds else ""
     return where, args, cur
 
@@ -109,7 +118,8 @@ def page_gallery():
     qs = urlencode(filt)
     return render_template("gallery.html", items=items, q=cur.get("q", ""), page=page, pages=pages,
                            total=total, opts=opts, cur=cur, ranges=GALLERY_RANGES,
-                           qs=qs, per_page=PAGE_SIZE, active="gallery")
+                           qs=qs, per_page=PAGE_SIZE, nsfw_open=private_open(),
+                           active="gallery")
 
 
 @bp.get("/api/gallery/image/<int:img_id>/params")

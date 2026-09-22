@@ -42,13 +42,20 @@
       {% endfor %}
     </select>
     {% endif %}
+    {% if nsfw_open %}
+    <select class="select is-small" name="nsfw" title="内容">
+      <option value="">全部内容</option>
+      <option value="1" {{ 'selected' if cur.get('nsfw') == '1' }}>仅私密</option>
+      <option value="0" {{ 'selected' if cur.get('nsfw') == '0' }}>仅普通</option>
+    </select>
+    {% endif %}
     <select class="select is-small" name="range">
       {% for k, v in ranges.items() %}
       <option value="{{ k }}" {{ 'selected' if cur.get('range', 'all') == k }}>{{ v }}</option>
       {% endfor %}
     </select>
     <button class="button is-small is-link" type="submit">筛选</button>
-    {% if q or cur.get('wf') or cur.get('model') or cur.get('lora') or cur.get('cat') or cur.get('batch') or cur.get('range') in ('today', '7d', '30d') %}
+    {% if q or cur.get('wf') or cur.get('model') or cur.get('lora') or cur.get('cat') or cur.get('batch') or cur.get('nsfw') or cur.get('range') in ('today', '7d', '30d') %}
     <a class="button is-small is-light" href="/gallery">清除</a>
     {% endif %}
   </form>
