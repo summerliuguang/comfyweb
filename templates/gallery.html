@@ -108,6 +108,7 @@
     <span class="dock-spacer"></span>
     <button class="button is-small" id="btnBatchCancel" type="button">取消</button>
     <button class="button is-small is-warning" id="btnBatchNsfw" type="button">私密</button>
+    <button class="button is-small is-success" id="btnBatchUnnsfw" type="button">公开</button>
     <button class="button is-small is-danger" id="btnBatchDel" type="button">删除</button>
   </div>
 </div>
@@ -121,6 +122,7 @@ const FAV_ON = '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentCol
 const FAV_OFF = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.6 9.7l5.8-.8z"/></svg>';
 /* 收藏切换:事件委托(卡片是 <a>,点星标要拦住跳转) */
 /* ---------- 批量选择(入口:底部固定栏按钮/长按卡片) ---------- */
+const NSFW_OPEN = {{ nsfw_open | tojson }};   // 私密模式是否开启(决定批量后卡片去留判断)
 let batchMode = false;
 const batchSel = new Set();
 
@@ -158,11 +160,14 @@ document.getElementById('btnBatchMode').addEventListener('click', () => setBatch
 /* 长按卡片 500ms 进入选择;不松手继续滑动即沿途连选(选择模式下长按拖动同样连选) */
 let lpTimer = 0, lpFired = false, lpStart = null, lpCard = null;
 let dragState = null;   // 拖选激活:{ state } —— 沿途卡片统一设为该勾选状态
+let lpDownMark = false; // 按下时手指在勾选圈上(click 的 target 会因手指微移漂走,按下目标才可靠)
 const masonryEl = document.querySelector('.masonry');
 masonryEl.addEventListener('pointerdown', (e) => {
+  lpDownMark = false;
   if (lpTimer || dragState) return;
   const card = e.target.closest('.gitem');
-  if (!card || e.target.closest('.sel-mark')) return;   // 圈圈有自己的点击勾选
+  if (!card) return;
+  if (e.target.closest('.sel-mark')) { lpDownMark = true; return; }   // 圈圈:click 按勾选处理
   lpCard = card;
   lpStart = { x: e.clientX, y: e.clientY };
   lpFired = false;
@@ -217,20 +222,36 @@ async function batchAct(action, nsfw) {
       body: JSON.stringify({ action, rowids: [...batchSel], nsfw }) });
     const d = await r.json();
     if (!r.ok) { window.toast && toast(d.error || '操作失败'); return; }
-    if (d.failed) alert(`完成 ${d.done} 张,失败 ${d.failed} 张:\n` + (d.errors || []).join('\n'));
-    // 原地更新:消失的卡片移除+重排+计数递减,浏览位置保持在刚才的地方
-    const cards = [...document.querySelectorAll('.gitem.sel')];
-    cards.forEach(c => c.remove());
+    if (d.failed) { console.error('批量失败详情:', d.errors); toast(`完成 ${d.done} 张,失败 ${d.failed} 张(详情见控制台)`, 'bad'); }
+    // 原地更新:只有操作让图片从当前视图消失时才移除卡片(全部内容视图里标/取消
+    // 私密的图原地不动,不该消失);且只移除**实际成功**的——删除失败的图数据还在,
+    // 卡片若一并移除,下滑分页时它又出现,看起来像"删掉的图复活"。
+    // 注意先取卡片引用再退出选择模式——setBatchMode(false) 会清掉 .sel 类
+    const viewNsfw = new URLSearchParams(location.search).get('nsfw');   // '1'/'0'/null
+    const viewOnlyNormal = !NSFW_OPEN || viewNsfw === '0';
+    const remove = action === 'delete' ||
+      (action === 'private' && ((nsfw && viewOnlyNormal) || (!nsfw && viewNsfw === '1')));
+    const okSet = new Set(d.ok_ids || []);
+    const cards = [...document.querySelectorAll('.gitem.sel')]
+      .filter(c => okSet.has(parseInt(c.dataset.rid, 10)));
     setBatchMode(false);
-    window.__masonryRelayout && window.__masonryRelayout();
-    if (d.hidden) window.__viewTotalDelta && window.__viewTotalDelta(d.hidden);
+    if (remove) {
+      cards.forEach(c => c.remove());
+      window.__masonryRelayout && window.__masonryRelayout();
+      window.__viewTotalDelta && window.__viewTotalDelta(cards.length);
+    }
     window.toast && toast(`完成 ${d.done} 张${d.failed ? `,失败 ${d.failed}` : ''}`);
   } catch (e) { window.toast && toast('操作失败: ' + e.message); }
 }
 document.getElementById('btnBatchDel').addEventListener('click', () => batchAct('delete'));
 document.getElementById('btnBatchNsfw').addEventListener('click', () => batchAct('private', true));
+document.getElementById('btnBatchUnnsfw').addEventListener('click', () => batchAct('private', false));
 
-/* 批量模式大图预览:灯箱浏览已加载的图片,底部按钮就地勾/取消;关闭回到原位 */
+/* 批量模式大图预览:灯箱浏览已加载的图片,底部按钮就地勾/取消;关闭回到原位。
+   pushState 占一条历史:手机返回手势=关灯箱(不导航离开,位置/勾选全保留),
+   × /Esc 关闭时回退弹掉占位,历史栈保持平衡 */
+let lbPushed = false, lbShowIdx = -1;
+const lbInfoCache = {};
 function openBatchPreview(card) {
   const cards = [...document.querySelectorAll('.gitem')];
   const list = cards.map(c => ({
@@ -244,15 +265,52 @@ function openBatchPreview(card) {
     btn.textContent = on ? '✓ 已选中' : '选中';
     btn.classList.toggle('on', on);
   };
+  /* 异步拉详情(库内信息+PNG 内嵌参数)填进灯箱说明行;滑走后返回的旧响应不覆盖 */
+  const showInfo = async (i) => {
+    const rid = list[i].rid;
+    let fmt = lbInfoCache[rid];
+    if (fmt === undefined) {
+      try {
+        const r = await fetch(`/api/library/image/${rid}/info`);
+        const d = await r.json();
+        if (r.ok) {
+          const bits = [];
+          if (d.prompt) bits.push(d.prompt.length > 50 ? d.prompt.slice(0, 50) + '…' : d.prompt);
+          if (d.model) bits.push(d.model.replace(/\.[^.]+$/, ''));
+          if (d.seed != null && d.seed !== '') bits.push('seed ' + d.seed);
+          fmt = bits.join(' · ');
+        } else fmt = '';
+      } catch (e) { fmt = ''; }
+      lbInfoCache[rid] = fmt;
+    }
+    if (lbShowIdx === i) Lightbox.setCaption(fmt);
+  };
+  history.pushState({ gpreview: 1 }, '', location.href);
+  lbPushed = true;
   Lightbox.open(list, cards.indexOf(card), {
-    onShow: syncBtn,
+    onShow: (i) => { lbShowIdx = i; syncBtn(i); showInfo(i); },
     onAction: (i) => {
       const c = cards[i];
       if (c) applySel(c, !c.classList.contains('sel'));
       syncBtn(i);
     },
+    onImgTap: (i) => {          // 批量预览里点图片本身=直接勾选/取消(点图即选,不用瞄准按钮)
+      const c = cards[i];
+      if (c) applySel(c, !c.classList.contains('sel'));
+      syncBtn(i);
+    },
+    onClose: () => {
+      if (lbPushed) { lbPushed = false; history.back(); }   // 弹掉占位(popstate 里灯箱已关,无操作)
+    },
   });
 }
+window.addEventListener('popstate', () => {
+  const lb = document.querySelector('.lightbox');
+  if (lb && !lb.hidden) {
+    lbPushed = false;   // back 已消费占位;先置 false,防 close 的 onClose 再 back
+    Lightbox.close();
+  }
+});
 
 document.querySelector('.masonry').addEventListener('click', async (e) => {
   if (lpFired) { e.preventDefault(); lpFired = false; return; }   // 长按已处理,吞掉紧随的点击
@@ -260,12 +318,16 @@ document.querySelector('.masonry').addEventListener('click', async (e) => {
     const card = e.target.closest('.gitem');
     if (card) {
       e.preventDefault();
-      if (e.target.closest('.sel-mark')) toggleSel(card);   // 圈圈=勾选
-      else openBatchPreview(card);                          // 图片区域=看大图
+      if (e.target.closest('.sel-mark') || lpDownMark) {   // 按下目标在圈上=勾选(click target 会漂)
+        lpDownMark = false;
+        toggleSel(card);
+      } else openBatchPreview(card);                       // 图片区域=看大图
     }
     return;
   }
   if (e.target.closest('.gitem')) {
+    const g = e.target.closest('.gitem');
+    g.style.viewTransitionName = 'hero';   // 跨页面 morph:这张缩略图放大飞成详情大图
     window.__saveGalleryState && window.__saveGalleryState();   // 进详情前存位置,返回时恢复
     return;   // 不拦截,让 <a> 正常跳转
   }
@@ -341,8 +403,11 @@ document.querySelector('.masonry').addEventListener('click', async (e) => {
     timer = setTimeout(layout, 80);
   });
   layout();
-  /* 无限滚动追加:新卡片入列后按既有列高规则排布 */
+  /* 无限滚动追加:按 rid 去重(服务端回落末页/竞态时不重复追加),再入列排布 */
   window.__masonryAdd = function (nodes) {
+    const have = new Set(Array.from(wrap.children).map(c => c.dataset.rid));
+    nodes = nodes.filter(n => !have.has(n.dataset.rid));
+    if (!nodes.length) return;
     nodes.forEach(n => wrap.appendChild(n));
     items = Array.from(wrap.children);
     bindLoad(nodes);
@@ -440,7 +505,11 @@ document.querySelector('.masonry').addEventListener('click', async (e) => {
     const r = await fetch(u);
     const d = await r.json();
     if (!r.ok) throw new Error(d.error || r.status);
-    page = d.page;
+    // 服务端权威:批量删除后总页数会缩,请求超出末页时服务端回落渲染末页——
+    // pages 必须跟着刷新,否则旧的大页数会让滚动无限重复请求末页
+    pages = d.pages;
+    page = Math.max(page, d.page);   // 并发补页时乱序返回,只前进不回退
+    if (typeof d.total === 'number') VIEW_TOTAL = d.total;
     window.__masonryAdd(d.items.map((it, i) => makeCard(it, (d.page - 1) * PER + i + 1)));
     sentinel.textContent = page >= pages ? '已全部加载' : '上拉加载更多';
   }
@@ -461,7 +530,10 @@ document.querySelector('.masonry').addEventListener('click', async (e) => {
     loading = false;
   }
 
-  /* ---- 返回恢复:详情页置 gback 标记后 back,这里补页并滚回原位 ---- */
+  /* ---- 返回恢复:补页并滚回原位 ----
+     触发条件两种(任一):①详情页「‹ 画廊」按钮置 gback 标记后 back;
+     ②浏览器导航类型是 back_forward——手机系统返回手势不经过任何按钮,
+     靠 performance 导航类型识别。菜单/筛选/跳页进入(navigate)不恢复。 */
   addEventListener('pageshow', (e) => {
     if (e.persisted) sessionStorage.removeItem(BKEY);   // bfcache 原样恢复,标记作废
   });
@@ -469,31 +541,59 @@ document.querySelector('.masonry').addEventListener('click', async (e) => {
     return rid ? document.querySelector(`.gitem[data-rid="${rid}"]`) : null;
   }
   function tryRestore() {
-    if (sessionStorage.getItem(BKEY) !== '1') return;
+    let navBack = false;
+    try {
+      navBack = (performance.getEntriesByType('navigation')[0] || {}).type === 'back_forward';
+    } catch (e) {}
+    if (sessionStorage.getItem(BKEY) !== '1' && !navBack) return;
     sessionStorage.removeItem(BKEY);
     let saved = null;
     try { saved = JSON.parse(sessionStorage.getItem(GKEY) || 'null'); } catch (e) {}
     if (!saved || saved.qs !== qs) return;
     sessionStorage.removeItem(GKEY);
-    const show = () => {
-      const card = ridCard(saved.lastRid);
+    /* 定位到最后查看的图(详情页滑到的那张);它超出已加载范围时查其全库位置,
+       并发补拉到所在页再 scrollIntoView。补页上限 10 页——详情滑得太远时
+       精确定位要拉几百张卡,代价过高,放弃定位退回离开时的滚动位置 */
+    async function locateLast() {
+      if (!saved.lastRid) {
+        scrollTo(0, saved.scrollY || 0);
+        return;
+      }
+      let card = ridCard(saved.lastRid);
+      if (!card) {
+        try {
+          const u = new URL('/api/gallery/pos', location.origin);
+          if (qs) u.search = '?' + qs;
+          u.searchParams.set('rid', saved.lastRid);
+          const r = await fetch(u);
+          const d = await r.json();
+          const wantPage = d.pos ? Math.min(Math.ceil(d.pos / PER), pages) : 0;
+          if (wantPage > page && wantPage <= page + 10) {
+            const batch = [];
+            for (let p = page + 1; p <= wantPage; p++) batch.push(fetchPage(p));
+            await Promise.all(batch);
+          }
+        } catch (e) { /* 查不到就退回 scrollY */ }
+        card = ridCard(saved.lastRid);
+      }
       if (card) card.scrollIntoView({ block: 'center' });
       else scrollTo(0, saved.scrollY || 0);
       updateDock();
-    };
-    const target = Math.min(saved.page || 1, pages);
-    if (target <= page) {   // 只渲染过一页或更少:现有卡片里定位即可
-      if (saved.scrollY || saved.lastRid) requestAnimationFrame(show);
-      return;
     }
+    const target = Math.min(saved.page || 1, pages);
     loading = true;
     sentinel.textContent = '恢复上次浏览位置…';
     (async () => {
       try {
         for (let p = page + 1; p <= target; p++) await fetchPage(p);
-        requestAnimationFrame(show);
+        await locateLast();
         // 图片陆续加载会触发重排推移位置,稳定后再校正一次
-        setTimeout(() => { show(); loading = false; saveState(); }, 400);
+        setTimeout(() => {
+          const c = ridCard(saved.lastRid);
+          if (c) c.scrollIntoView({ block: 'center' });
+          loading = false;
+          saveState();
+        }, 400);
       } catch (e) {
         loading = false;
         sentinel.textContent = '恢复未完成,继续上拉可接着加载';

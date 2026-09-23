@@ -742,7 +742,8 @@ def page_query(where, args, page, per_page):
 
 
 def filter_options():
-    """筛选下拉的可选项(模型/工作流/类型/批次/LoRA)。"""
+    """筛选下拉的可选项(模型/工作流/类型/批次/LoRA),只列有对应照片的——
+    没出过图的选了也是空结果,纯噪音;私密模式关闭时跳过标了私密的条目。"""
     with _lock:
         conn = _lib_connect()
 
@@ -751,19 +752,26 @@ def filter_options():
         def col(name):
             return [r[0] for r in conn.execute(
                 f"SELECT DISTINCT {name} FROM files WHERE {name}!=''{hide} ORDER BY 1")]
-        opts = {k: col(k) for k in ("model", "workflow", "category", "batch", "lora")}
-    # 模型下拉并入服务器已安装清单:没生成过图的模型也可选(筛选出 0 张即暂无图);
-    # LoRA 下拉只列有对应照片的——没出过图的 LoRA 选了也是空结果,列出来是噪音
-    open_ = (db.get_setting("private_enabled") or "") == "1"
-    cond = "" if open_ else " AND nsfw=0"
-    have = {o.rsplit("/", 1)[-1] for o in opts["model"]}
-    for r in db.query(f"SELECT filename FROM model_meta WHERE folder='checkpoints'{cond}"):
-        base = r["filename"].rsplit("/", 1)[-1]
-        if base and base not in have:
-            opts["model"].append(base)
-            have.add(base)
-    opts["model"].sort()
-    return opts
+        return {k: col(k) for k in ("model", "workflow", "category", "batch", "lora")}
+
+
+def position_of(rowid, where, args):
+    """图在某筛选视图(画廊排序:created_at DESC, rowid DESC)中的 1-based 位置。
+    图不存在或不满足筛选(如锁定时查私密图)返回 None。"""
+    with _lock:
+        conn = _lib_connect()
+        t = conn.execute("SELECT created_at FROM files WHERE rowid=?", (rowid,)).fetchone()
+        if not t:
+            return None
+        v = ("SELECT 1 FROM files WHERE " + where + " AND rowid=?") if where else \
+            "SELECT 1 FROM files WHERE rowid=?"
+        if not conn.execute(v, [*args, rowid]).fetchone():
+            return None
+        base = "FROM files f WHERE " + (where + " AND " if where else "") + \
+            "(f.created_at > ? OR (f.created_at = ? AND f.rowid > ?))"
+        a = [*args, t["created_at"], t["created_at"], rowid]
+        n = conn.execute(f"SELECT COUNT(*) {base}", a).fetchone()[0]
+    return n + 1
 
 
 def lookup_task_meta(filename):

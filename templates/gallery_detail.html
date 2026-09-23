@@ -16,7 +16,7 @@
     <button class="dnav next" id="btnNext" title="下一张(↓)">›</button>
   </div>
 
-  <div class="dhint" id="dhint">上下滑动切换 · 双指捏合缩放(小于原大自动回弹) · 信息栏上拉展开/下拉收起 · ◐ 切换背景</div>
+  <div class="dhint" id="dhint" hidden>上下滑动切换 · 双指捏合缩放(小于原大自动回弹) · 信息栏上拉展开/下拉收起 · ◐ 切换背景</div>
 
   <div class="v-toast" id="vToast"></div>
 
@@ -70,6 +70,27 @@
         history.back();
       }
     });
+  })();
+
+  /* 操作提示只在第一次看图时出现,6 秒后淡出,之后不再打扰 */
+  (function () {
+    const dhint = document.getElementById('dhint');
+    if (!dhint || localStorage.getItem('comfyweb.dhintShown')) return;
+    localStorage.setItem('comfyweb.dhintShown', '1');
+    dhint.hidden = false;
+    setTimeout(() => dhint.classList.add('fade'), 6000);
+  })();
+
+  /* 初始图也记入画廊浏览状态:没滑动就返回,画廊也能精确滚到这张 */
+  (function () {
+    try {
+      const st = JSON.parse(sessionStorage.getItem('comfyweb.gstate') || 'null');
+      const it0 = NEIGHBORS[{{ idx }}];
+      if (st && it0 && it0.rid) {
+        st.lastRid = it0.rid;
+        sessionStorage.setItem('comfyweb.gstate', JSON.stringify(st));
+      }
+    } catch (err) {}
   })();
 
   /* 首尾提示 toast */
@@ -223,7 +244,7 @@
         toast('已删除');
         cur = Math.min(cur, NEIGHBORS.length - 1);
         goTo(cur, false, true);   // goTo 内部已 renderSheetBody,不再重复调
-      } else { const d = await r.json().catch(() => ({})); alert(d.error || r.status); }
+      } else { const d = await r.json().catch(() => ({})); toast(d.error || r.status, 'bad'); }
     } catch (e) { toast('删除失败: ' + e.message); }
   });
 
@@ -392,8 +413,14 @@
         tx += e.clientX - lastX; ty += e.clientY - lastY;
         lastX = e.clientX; lastY = e.clientY;
         applyT();
-      } else if (Math.abs(e.clientY - sy) > 10) {
-        swiped = true;                       // 有位移,吞掉之后的点击
+      } else {
+        if (Math.abs(e.clientY - sy) > 10) {
+          swiped = true;                     // 有位移,吞掉之后的点击
+        }
+        if (scale <= 1.02 && swiping) {
+          // 原大态:图片跟手移动(阻尼 0.45),松手时回弹或切换滑入
+          img.style.transform = `translateY(${(e.clientY - sy) * 0.45}px)`;
+        }
       }
     }
   });
@@ -406,7 +433,12 @@
         const dy = e.clientY - sy;
         if (Math.abs(dy) >= 48) {                      // 原大状态上下滑切换
           swiped = true; setTimeout(() => { swiped = false; }, 500);
+          img.style.transform = '';                    // 清掉跟手位移,新图从滑动方向滑入
           step(dy < 0 ? 1 : -1);
+        } else if (dy) {                               // 未达阈值:平滑回弹
+          img.classList.add('snapping');
+          img.style.transform = '';
+          setTimeout(() => img.classList.remove('snapping'), 240);
         }
       }
       swiping = false;

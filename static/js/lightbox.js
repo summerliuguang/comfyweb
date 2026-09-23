@@ -1,13 +1,15 @@
 /* 通用灯箱:浏览模式(上下滑动/滚轮/方向键切换图片) + 聚焦模式(捏合/滚轮缩放、拖动平移)。
  * 用法:Lightbox.open([{url, thumb, caption?}, ...], startIndex,
- *                     {onIdxChange?, onShow?, onAction?})
+ *                     {onIdxChange?, onShow?, onAction?, onClose?, onImgTap?})
  * onShow(i)/onAction(i):可选底部操作按钮——传入 onAction 即显示,show/点击时回调。
+ * onImgTap(i):传入后点击图片=触发它(勾选场景),不再进入聚焦缩放;onClose():关闭时回调。
  */
 (function () {
   const SWIPE_PX = 48;
 
   let root = null, imgEl = null, cntEl = null, capEl = null, hintEl = null, actEl = null;
-  let imgs = [], idx = 0, mode = 'browse', onIdxChange = null, onShow = null, onAction = null;
+  let imgs = [], idx = 0, mode = 'browse';
+  let onIdxChange = null, onShow = null, onAction = null, onClose = null, onImgTap = null;
   let scale = 1, tx = 0, ty = 0;
   let pointers = new Map();   // pointerId -> {x,y}
   let startDist = 0, startScale = 1;
@@ -51,6 +53,7 @@
       return '捏合/滚轮缩放 · 拖动平移 · 双击复位 · 点击图片返回';
     }
     const sw = imgs.length > 1 ? '上下滑动切换 · ' : '';
+    if (onImgTap) return `${sw}点击图片勾选/取消 · ◐切换背景`;
     return `${sw}点击图片放大 · ◐切换背景`;
   }
 
@@ -86,7 +89,10 @@
     onIdxChange = (opts && opts.onIdxChange) || null;
     onShow = (opts && opts.onShow) || null;
     onAction = (opts && opts.onAction) || null;
+    onClose = (opts && opts.onClose) || null;
+    onImgTap = (opts && opts.onImgTap) || null;
     ensure();
+    root.classList.remove('closing');   // 快速关开后清掉淡出态(forwards 会保持透明)
     if (actEl) actEl.hidden = !onAction;
     show(Math.max(0, Math.min(start || 0, list.length - 1)));
     root.hidden = false;
@@ -95,9 +101,14 @@
 
   function close() {
     if (!root || root.hidden) return;
-    root.hidden = true;
-    document.body.style.overflow = '';
-    imgEl.src = '';
+    root.classList.add('closing');            // 先播淡出,再卸载(hidden 立即消失太生硬)
+    setTimeout(() => {
+      root.classList.remove('closing');
+      root.hidden = true;
+      document.body.style.overflow = '';
+      imgEl.src = '';
+      if (onClose) { const cb = onClose; onClose = null; cb(); }
+    }, 150);
   }
 
   function dist2(a, b) {
@@ -171,7 +182,11 @@
     root.addEventListener('pointercancel', endPointer);
 
     imgEl.addEventListener('click', (e) => {
-      if (mode === 'browse' && !dragged) { e.stopPropagation(); setMode('focus'); }
+      if (mode === 'browse' && !dragged) {
+        e.stopPropagation();
+        if (onImgTap) { onImgTap(idx); return; }
+        setMode('focus');
+      }
     });
     imgEl.addEventListener('dblclick', (e) => {
       e.preventDefault();
@@ -188,5 +203,12 @@
     });
   }
 
-  window.Lightbox = { open, close };
+  /* 运行中更新底部说明文字(如异步拉取的图片详情);空串隐藏 */
+  function setCaption(t) {
+    if (!capEl) return;
+    capEl.textContent = t || '';
+    capEl.hidden = !t;
+  }
+
+  window.Lightbox = { open, close, setCaption };
 })();

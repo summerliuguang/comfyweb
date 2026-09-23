@@ -5,6 +5,7 @@
 """
 import json
 import re
+import time
 from urllib.parse import urlencode
 
 from flask import Blueprint, jsonify, render_template, request
@@ -99,6 +100,15 @@ def api_gallery_items():
     where, args, _cur = _gallery_filter()
     items, page, pages, total = _gallery_items(where, args, _parse_page())
     return {"items": items, "page": page, "pages": pages, "total": total}
+
+
+@bp.get("/api/gallery/pos")
+def api_gallery_pos():
+    """某图在当前筛选视图中的 1-based 位置(画廊返回恢复:定位超出已加载范围的图)。"""
+    rid = request.args.get("rid", type=int)
+    where, args, _cur = _gallery_filter()
+    pos = library.position_of(rid, where, args) if rid else None
+    return {"pos": pos}
 
 
 @bp.get("/gallery")
@@ -320,34 +330,51 @@ def api_gallery_batch():
     d = request.get_json(silent=True) or {}
     action = d.get("action")
     rowids = d.get("rowids")
-    if action not in ("delete", "private") or not isinstance(rowids, list) or not rowids:
+    if action not in ("delete", "private", "unfav") or not isinstance(rowids, list) or not rowids:
         return jsonify({"error": "参数无效"}), 400
     if len(rowids) > 500:
         return jsonify({"error": "一次最多 500 张"}), 400
     clean = [int(r) for r in rowids if str(r).strip().isdigit()]
     nsfw = bool(d.get("nsfw"))
     done = failed = 0
+    ok_ids = []
     errors = []
     for rid in clean:
-        if action == "delete":
-            ok, error = library.delete_image(rid)
+        ok, error = False, None
+        if action == "unfav":
+            # 收藏页批量取消收藏(rowids=images.id);fav=0 影响行数为 0 视为已取消
+            n = db.execute("UPDATE images SET fav=0 WHERE id=? AND fav=1", (rid,)).rowcount
+            ok, error = (n > 0), None if n > 0 else "未收藏"
         else:
-            ok, error = library.mark_private(rid, nsfw)
+            # 失败自动重试 2 次(共 3 次,间隔 0.3s 缓冲抖动);"图不存在"是确定性
+            # 失败,重试也没用,立即放弃——500 张上限时省下最多 300s 的无效等待
+            for attempt in range(3):
+                if action == "delete":
+                    ok, error = library.delete_image(rid)
+                else:
+                    ok, error = library.mark_private(rid, nsfw)
+                if ok or (error and "不存在" in error):
+                    break
+                if attempt < 2:
+                    time.sleep(0.3)
         if ok:
             done += 1
+            ok_ids.append(rid)
         else:
             failed += 1
             if len(errors) < 3:
                 errors.append(f"#{rid}: {error}")
     # hidden = 操作后从当前视图消失的张数(前端据此原地更新计数,不刷新页面)
-    if action == "delete":
+    if action in ("delete", "unfav"):
         hidden = done
     elif action == "private" and nsfw and not private_open():
         hidden = done
     else:
         hidden = 0
+    # ok_ids: 实际成功的 rowid——前端只移除成功的卡片,失败的保留(否则删除失败
+    # 的图卡片消失但数据还在,下滑分页时又出现,看起来像"删掉的图复活")
     return {"ok": True, "done": done, "failed": failed, "errors": errors,
-            "hidden": hidden}
+            "hidden": hidden, "ok_ids": ok_ids}
 
 
 @bp.post("/api/library/image/<int:rowid>/nsfw")
@@ -376,9 +403,11 @@ def page_favorites():
         "FROM images i JOIN tasks t ON t.id=i.task_id WHERE i.fav=1 "
         "ORDER BY i.id DESC LIMIT ? OFFSET ?",
         (PAGE_SIZE, (page - 1) * PAGE_SIZE))
+    # 库索引始终要查:锁定时用于隐藏私密图;缩略图优先走 /libthumb(NAS 本地),
+    # 不依赖 ComfyUI 主机在线——否则主机一离线整页图片挂起空白
+    idx = library.indexed_map([r["filename"] for r in rows])
     hide = set()
     if not private_open():
-        idx = library.indexed_map([r["filename"] for r in rows])
         hide = {r["filename"] for r in rows
                 if (idx.get(r["filename"]) or {}).get("nsfw")}
     items = []
@@ -386,7 +415,9 @@ def page_favorites():
         if r["filename"] in hide:
             continue
         it = dict(r)
-        it["thumb"] = image_url(r["filename"], r["subfolder"], r["type"], preview="webp;jpeg;70")
+        lib = idx.get(r["filename"]) or {}
+        it["thumb"] = (f"/libthumb/{lib['rowid']}" if lib.get("rowid") else
+                       image_url(r["filename"], r["subfolder"], r["type"], preview="webp;jpeg;70"))
         items.append(it)
     qs = ""
     return render_template("favorites.html", items=items, page=page, pages=pages,
