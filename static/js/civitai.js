@@ -30,6 +30,11 @@
 
   async function loadLocal() {
     const box = $('localBox');
+    // ComfyUI 断连时已安装列表注定超时:直接给结论,连上后经 comfy-conn-restored 自动重拉
+    if (document.body.dataset.conn === '0') {
+      box.innerHTML = '<p class="empty">ComfyUI 未连接——连上后此处自动刷新</p>';
+      return;
+    }
     try {
       const d = await api('/api/local/models?type=' + window.LOCAL_DIR + '&meta=1');
       box.innerHTML = '';
@@ -49,7 +54,7 @@
         try {
           await apiPost('/api/local/identify', { folder: window.LOCAL_DIR });
           startIdentifyPoll();
-        } catch (e) { alert(e.message); }
+        } catch (e) { toast(e.message, 'bad'); }
         btn.classList.remove('is-loading');
       });
       head.appendChild(btn);
@@ -103,7 +108,7 @@
             f.nsfw = d.nsfw;
             nb.textContent = f.nsfw ? '私密' : '设私密';
             nb.className = 'button is-small' + (f.nsfw ? ' is-danger' : ' is-light');
-          } catch (e) { alert(e.message); }
+          } catch (e) { toast(e.message, 'bad'); }
           nb.classList.remove('is-loading');
           nb.disabled = false;
         });
@@ -123,13 +128,18 @@
       box.innerHTML = `<p class="task-err">${esc(e.message)}</p>`;
     }
   }
+  document.addEventListener('comfy-conn-restored', () => { loadLocal(); });
 
   function startIdentifyPoll() {
     if (identifyPoll) return;
     let ticks = 0;
     identifyPoll = setInterval(async () => {
       ticks++;
+      // 记住用户展开的 details,重渲染后恢复(否则看列表时每 5 秒被弹回)
+      const openIdx = [...document.querySelectorAll('#localBox details')]
+        .map((d, i) => d.open ? i : -1).filter(i => i >= 0);
       await loadLocal();
+      [...document.querySelectorAll('#localBox details')].forEach((d, i) => { d.open = openIdx.includes(i); });
       const txt = $('localBox').textContent || '';
       const un = Number((txt.match(/未识别 (\d+)/) || [])[1] || 0);
       if (!un || ticks > 60) { clearInterval(identifyPoll); identifyPoll = null; }
@@ -137,10 +147,19 @@
   }
 
   /* ---------- 搜索(全部走 cursor 分页;本地库优先,refresh 强制在线更新) ---------- */
+  let searchSeq = 0;   // 快速翻页/切筛选时丢弃过期响应
   async function doSearch(reset, refresh) {
     const errBox = $('listError');
     errBox.hidden = true;
-    $('grid').innerHTML = '<p class="empty">加载中…</p>';
+    const seq = ++searchSeq;
+    // 加载中不清空旧内容:整格置灰 + 顶部细进度条,页面高度不塌陷
+    const grid = $('grid');
+    if (grid.children.length) {
+      grid.style.opacity = '.45';
+      grid.style.pointerEvents = 'none';
+    } else {
+      grid.innerHTML = '<p class="empty">加载中…</p>';
+    }
     $('emptyHint').hidden = true;
     $('pager').hidden = true;
     $('srcHint').hidden = true;
@@ -151,6 +170,14 @@
       pageNo = 1;
       cursorFor = { 1: null };
     }
+    // 搜索条件同步 URL:刷新/分享不丢(页码依赖 cursor 链,恢复时回第 1 页)
+    {
+      const u = new URL(location);
+      u.search = '';
+      for (const [k, v] of Object.entries({ q: lastQ, sort: lastSort, base: lastBase }))
+        if (v && !(k === 'sort' && v === 'Most Downloaded')) u.searchParams.set(k, v);
+      history.replaceState(null, '', u);
+    }
     const qs = new URLSearchParams({ type: TYPE, sort: lastSort });
     if (lastQ) qs.set('q', lastQ);
     if (lastBase) qs.set('base', lastBase);
@@ -158,6 +185,7 @@
     if (refresh) qs.set('refresh', '1');
     try {
       const d = await api('/api/civitai/search?' + qs);
+      if (seq !== searchSeq) return;   // 过期响应丢弃
       hasNext = !!d.nextCursor;
       if (d.nextCursor) cursorFor[pageNo + 1] = d.nextCursor;
       renderGrid(d);
@@ -167,7 +195,8 @@
         : '已从 Civitai 拉取并入库,下次秒开';
       hint.hidden = false;
     } catch (e) {
-      $('grid').innerHTML = '';
+      if (seq !== searchSeq) return;
+      grid.innerHTML = '';
       errBox.textContent = e.message;
       errBox.hidden = false;
     }
@@ -175,6 +204,8 @@
 
   function renderGrid(d) {
     const grid = $('grid');
+    grid.style.opacity = '';
+    grid.style.pointerEvents = '';
     grid.innerHTML = '';
     if (!d.items.length) { $('emptyHint').hidden = false; return; }
     for (const it of d.items) grid.appendChild(card(it));
@@ -220,13 +251,16 @@
       box.innerHTML = '<p class="empty">加载中…</p>';
       $('detailOverlay').hidden = false;
       $('detailOverlay').scrollTop = 0;
+      document.body.style.overflow = 'hidden';
     }
     try {
       const m = await api('/api/civitai/model/' + id + (refresh ? '?refresh=1' : ''));
       renderDetail(m, cover);
     } catch (e) {
-      if (refresh) alert('从 Civitai 更新失败: ' + e.message);
-      else box.innerHTML = `<p class="task-err">${esc(e.message)}</p>`;
+      if (refresh) { toast('从 Civitai 更新失败: ' + e.message, 'bad'); return; }
+      box.innerHTML = `<p class="task-err">详情加载失败: ${esc(e.message)}</p>` +
+        '<p style="margin-top:.5rem"><button class="button is-small is-link" id="btnRetryDetail">重试</button></p>';
+      document.getElementById('btnRetryDetail').addEventListener('click', () => showDetail(id, cover));
     }
   }
 
@@ -376,7 +410,13 @@
     return box;
   }
 
-  function hideDetail() { $('detailOverlay').hidden = true; }
+  function hideDetail() {
+    $('detailOverlay').hidden = true;
+    document.body.style.overflow = '';
+  }
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !$('detailOverlay').hidden) hideDetail();
+  });
   $('detailOverlay').addEventListener('click', e => { if (e.target === $('detailOverlay')) hideDetail(); });
 
   /* ---------- 事件 ---------- */
@@ -395,6 +435,13 @@
   $('prevPage').addEventListener('click', () => { if (pageNo > 1) { pageNo--; doSearch(false); } });
   $('nextPage').addEventListener('click', () => { if (hasNext) { pageNo++; doSearch(false); } });
 
+  // 从 URL 恢复搜索条件(分享/刷新场景)
+  {
+    const u = new URLSearchParams(location.search);
+    if (u.get('q')) $('q').value = u.get('q');
+    if (u.get('sort')) $('sort').value = u.get('sort');
+    if (u.get('base')) $('base').value = u.get('base');
+  }
   loadLocal();
   doSearch(true);
 })();

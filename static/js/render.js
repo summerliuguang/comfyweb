@@ -395,7 +395,7 @@ function _attachAiRow(control, t) {
       t.dispatchEvent(new Event('input', { bubbles: true }));
       t.focus();
     } catch (e) {
-      alert('AI ' + (kind === 'polish' ? '润色' : '翻译') + '失败: ' + e.message);
+      toast('AI ' + (kind === 'polish' ? '润色' : '翻译') + '失败: ' + e.message, 'bad');
     } finally {
       btn.disabled = false;
       btn.textContent = old;

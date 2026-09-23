@@ -70,9 +70,33 @@
       $('editor').hidden = false;
       $('loading').hidden = true;
     } catch (e) {
-      $('loading').textContent = '加载失败: ' + e.message;
+      const box = $('loading');
+      box.innerHTML = '';
+      const p1 = document.createElement('p');
+      p1.className = 'task-err';
+      p1.textContent = '加载失败: ' + e.message;
+      const p2 = document.createElement('p');
+      p2.style.marginTop = '.5rem';
+      const b = document.createElement('button');
+      b.className = 'button is-small is-link';
+      b.textContent = '重试';
+      b.addEventListener('click', () => location.reload());
+      p2.appendChild(b);
+      box.append(p1, p2);
     }
   }
+
+  /* 未保存改动保护:改过参数离开前提醒,标题加 • 标记 */
+  let dirty = false;
+  document.addEventListener('input', () => {
+    if (!dirty) {
+      dirty = true;
+      document.title = '• ' + document.title;
+    }
+  });
+  window.addEventListener('beforeunload', (e) => {
+    if (dirty) { e.preventDefault(); e.returnValue = ''; }
+  });
 
   $('btnSave').addEventListener('click', async () => {
     $('saveError').hidden = true;
@@ -92,6 +116,8 @@
       if (!res.ok) throw new Error(data.error || res.status);
       $('saveHint').textContent = '已保存 ' + new Date().toLocaleTimeString();
       setTimeout(() => { $('saveHint').textContent = ''; }, 2500);
+      dirty = false;
+      document.title = document.title.replace(/^• /, '');
     } catch (e) {
       $('saveError').textContent = e.message;
       $('saveError').hidden = false;

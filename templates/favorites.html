@@ -12,8 +12,9 @@
   {% else %}
   <div class="masonry">
     {% for it in items %}
-    <a class="gitem" href="/gallery/image/{{ it.id }}">
+    <a class="gitem" href="/gallery/image/{{ it.id }}" data-rid="{{ it.id }}">
       <img src="{{ it.thumb }}" loading="lazy" alt="收藏图片">
+      <span class="sel-mark" aria-hidden="true"></span>
       <button class="fav-btn on" type="button" data-fav="{{ it.id }}" title="取消收藏"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" stroke="none" aria-hidden="true"><path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8L3.6 9.7l5.8-.8z"/></svg></button>
       <div class="gmeta" title="{{ it.prompt_text }}">{{ it.prompt_text or it.workflow_name or '(无提示词)' }}</div>
     </a>
@@ -28,27 +29,122 @@
   {% endif %}
   {% endif %}
 </div>
+
+{% if items %}
+<div class="gallery-dock" id="favDock">
+  <div class="dock-row" id="dockNormal">
+    <span class="dock-pos">共 {{ total }} 张收藏</span>
+    <button class="button is-small is-link dock-btn" id="btnBatchMode" type="button">批量管理</button>
+  </div>
+  <div class="dock-row" id="dockBatch" hidden>
+    <span class="dock-pos" id="batchCount">已选 0 张</span>
+    <span class="dock-spacer"></span>
+    <button class="button is-small" id="btnBatchCancel" type="button">取消</button>
+    <button class="button is-small is-danger" id="btnBatchUnfav" type="button">取消收藏</button>
+  </div>
+</div>
+{% endif %}
 {% endblock %}
 {% block scripts %}
 {% if items %}
 <script>
-/* 取消收藏后把卡片淡出移除,瀑布流随窗口事件自然不会重排——直接重算高度 */
-document.querySelector('.masonry').addEventListener('click', async (e) => {
-  const btn = e.target.closest('.fav-btn');
-  if (!btn) return;
-  e.preventDefault();
-  const r = await fetch(`/api/gallery/image/${btn.dataset.fav}/fav`, { method: 'POST' });
-  if (!r.ok) return;
-  const d = await r.json();
-  if (!d.fav) {
-    const card = btn.closest('.gitem');
-    card.style.transition = 'opacity .25s';
-    card.style.opacity = '0';
-    setTimeout(() => {
-      card.remove();
-      document.dispatchEvent(new Event('resize'));  // 触发瀑布流重排
-    }, 260);
+/* ---------- 收藏页交互:批量管理 + 取消收藏撤销 + 计数同步 ---------- */
+let total = {{ total }};
+let batchMode = false;
+const sel = new Set();
+const masonryEl = document.querySelector('.masonry');
+const tag = document.querySelector('.page-head .tag');
+
+function setTotal(n) {
+  total = n;
+  if (tag) tag.textContent = `${total} 张`;
+  document.querySelector('#dockNormal .dock-pos').textContent = `共 ${total} 张收藏`;
+}
+function updateCount() {
+  document.getElementById('batchCount').textContent = `已选 ${sel.size} 张`;
+}
+function setBatchMode(on) {
+  batchMode = on;
+  document.body.classList.toggle('batch-mode', on);
+  document.getElementById('dockNormal').hidden = on;
+  document.getElementById('dockBatch').hidden = !on;
+  if (!on) {
+    sel.clear();
+    document.querySelectorAll('.gitem.sel').forEach(el => el.classList.remove('sel'));
   }
+  updateCount();
+}
+function toggleSel(card) {
+  const rid = parseInt(card.dataset.rid, 10);
+  const on = !card.classList.contains('sel');
+  card.classList.toggle('sel', on);
+  if (on) sel.add(rid); else sel.delete(rid);
+  updateCount();
+}
+function relayout() { document.dispatchEvent(new Event('resize')); }
+function showEmptyIfGone() {
+  if (!masonryEl.children.length) {
+    masonryEl.outerHTML = '<div class="empty">收藏都取消啦。去画廊或详情页点星标收藏图片。</div>';
+    const dock = document.getElementById('favDock');
+    if (dock) dock.remove();
+    const pager = document.querySelector('.pager');
+    if (pager) pager.remove();
+  }
+}
+/* 取消收藏(单张/批量共用):移除卡片、计数递减;撤销时恢复数据与卡片 */
+async function unfavIds(ids, cards) {
+  const snapshot = cards.map(c => ({rid: c.dataset.rid, html: c.outerHTML, next: c.nextSibling}));
+  try {
+    const r = await fetch('/api/gallery/batch', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({action: 'unfav', rowids: ids.map(Number)}) });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || '操作失败', 'bad'); return; }
+    const okSet = new Set(d.ok_ids || []);
+    cards.forEach(c => { if (okSet.has(parseInt(c.dataset.rid, 10))) c.remove(); });
+    setTotal(total - okSet.size);
+    relayout();
+    showEmptyIfGone();
+    toast(`已取消收藏 ${okSet.size} 张`, '', {
+      label: '撤销',
+      cb: async () => {
+        try {
+          for (const s of snapshot) {
+            if (!okSet.has(parseInt(s.rid, 10))) continue;
+            await fetch(`/api/gallery/image/${s.rid}/fav`, { method: 'POST' });
+            if (masonryEl.contains(masonryEl.firstElementChild) || masonryEl.children.length) {
+              masonryEl.insertAdjacentHTML('beforeend', s.html);   // 撤销的卡片排到末尾
+            } else {
+              location.reload();                                    // 从空态恢复:整页重建
+              return;
+            }
+          }
+          setTotal(total + okSet.size);
+          relayout();
+        } catch (e) { toast('撤销失败: ' + e.message, 'bad'); }
+      }
+    });
+  } catch (e) { toast('操作失败: ' + e.message, 'bad'); }
+}
+
+document.querySelector('.masonry').addEventListener('click', async (e) => {
+  const card = e.target.closest('.gitem');
+  if (!card) return;
+  if (batchMode) { e.preventDefault(); toggleSel(card); return; }
+  const btn = e.target.closest('.fav-btn');
+  if (!btn) return;                       // 点卡片本体进详情
+  e.preventDefault();
+  unfavIds([parseInt(btn.dataset.fav, 10)], [card]);
+});
+document.getElementById('btnBatchMode').addEventListener('click', () => setBatchMode(true));
+document.getElementById('btnBatchCancel').addEventListener('click', () => setBatchMode(false));
+document.getElementById('btnBatchUnfav').addEventListener('click', async () => {
+  if (!sel.size) { toast('先勾选图片'); return; }
+  if (!confirm(`取消收藏选中的 ${sel.size} 张图片?(可撤销)`)) return;
+  const ids = [...sel];
+  const cards = [...document.querySelectorAll('.gitem.sel')];
+  setBatchMode(false);
+  await unfavIds(ids, cards);
 });
 </script>
 <script>

@@ -102,6 +102,7 @@
   // 断线恢复瞬间派发 comfy-conn-restored,页面可自动重拉受影响的数据
   var wasConn = null;
   function setConn(ok, tip) {
+    document.body.dataset.conn = ok ? '1' : '0';   // 全站可读:依赖 ComfyUI 的面板据此快速失败
     var d = document.getElementById('connDotM');
     if (d) {
       d.classList.toggle('ok', ok);

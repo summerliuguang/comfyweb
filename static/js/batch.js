@@ -20,9 +20,11 @@
 
   /* ---------- 提示词模板 ---------- */
 
-  async function loadTemplates() {
-    let d;
-    try { d = await toJson(await fetch('/api/batch/templates')); } catch (e) { return; }
+  async function loadTemplates(prefetched) {
+    let d = prefetched;
+    if (!d) {
+      try { d = await toJson(await fetch('/api/batch/templates')); } catch (e) { return; }
+    }
     const sel = $('tplSelect');
     window._batchTplCache = d.templates;
     sel.innerHTML = '<option value="">— 选择已保存模板 —</option>' +
@@ -33,7 +35,7 @@
 
   $('btnTplNsfw').addEventListener('click', async () => {
     const name = $('tplSelect').value;
-    if (!name) { alert('先选择模板'); return; }
+    if (!name) { toast('先选择模板'); return; }
     const t = (window._batchTplCache || []).find(x => x.name === name);
     if (!t) return;
     try {
@@ -42,7 +44,7 @@
         body: JSON.stringify({ name, nsfw: !t.nsfw }) }));
       t.nsfw = d.nsfw;
       loadTemplates();
-    } catch (e) { alert(e.message); }
+    } catch (e) { toast(e.message, 'bad'); }
   });
 
   $('tplSelect').addEventListener('change', () => {
@@ -80,7 +82,7 @@
       }));
       window._batchTplCache = d.templates;
       await loadTemplates();
-    } catch (e) { alert(e.message); }
+    } catch (e) { toast(e.message, 'bad'); }
   });
 
   /* ---------- AI 细化 ---------- */
@@ -115,11 +117,24 @@
         batchRefineModel = sel.value;
         localStorage.setItem('comfyweb.batchmodel', sel.value);
       });
-    } catch (e) { /* 网关不可达:留空,后端用默认模型 */ }
+    } catch (e) {
+      // 网关不可达:留空,后端用默认模型——但要让用户看得见原因
+      const sel = $('refineModel');
+      if (sel) {
+        sel.innerHTML = '<option value="">默认模型(网关不可达)</option>';
+        sel.disabled = true;
+      }
+    }
   })();
 
   $('btnRefine').addEventListener('click', async () => {
     const btn = $('btnRefine'), errBox = $('refineError');
+    if (!$('themeInput').value.trim()) {
+      errBox.textContent = '先描述一下主题,再点 AI 细化';
+      errBox.hidden = false;
+      $('themeInput').focus();
+      return;
+    }
     errBox.hidden = true;
     btn.classList.add('is-loading');
     try {
@@ -151,13 +166,16 @@
     row1.className = 'task-head';
     const name = document.createElement('input');
     name.className = 'input';
-    name.style.cssText = 'flex:1;font-size:.85rem;font-weight:600';
+    name.style.cssText = 'flex:1;font-size:1rem;font-weight:600';
     name.value = t.name;
     name.dataset.idx = i; name.dataset.k = 'name';
     const del = document.createElement('button');
     del.className = 'button is-small';
     del.textContent = '×'; del.title = '删除此任务';
-    del.addEventListener('click', () => { tasks.splice(i, 1); renderTasks(); });
+    del.addEventListener('click', () => {
+      if (!confirm(`删除任务「${tasks[i].name || '未命名'}」?`)) return;
+      tasks.splice(i, 1); renderTasks();
+    });
     row1.appendChild(name); row1.appendChild(del);
     d.appendChild(row1);
 
@@ -167,7 +185,7 @@
     const mk = (k, val, w, type) => {
       const inp = document.createElement('input');
       inp.className = 'input';
-      inp.style.cssText = `width:${w};font-size:.78rem;padding:.3rem .45rem`;
+      inp.style.cssText = `width:${w};font-size:1rem;padding:.3rem .45rem`;
       inp.type = type || 'text';
       inp.value = val;
       inp.dataset.idx = i; inp.dataset.k = k;
@@ -175,7 +193,7 @@
     };
     const pipe = document.createElement('select');
     pipe.className = 'select';
-    pipe.style.cssText = 'font-size:.78rem;width:auto;flex:none';
+    pipe.style.cssText = 'font-size:1rem;width:auto;flex:none';
     pipe.innerHTML = Object.keys(PIPE_LABEL).map(k =>
       `<option value="${k}"${k === t.pipeline ? ' selected' : ''}>${PIPE_LABEL[k]}</option>`).join('');
     pipe.dataset.idx = i; pipe.dataset.k = 'pipeline';
@@ -187,7 +205,7 @@
 
     const prompt = document.createElement('textarea');
     prompt.className = 'textarea';
-    prompt.style.cssText = 'font-size:.76rem;margin-top:.45rem';
+    prompt.style.cssText = 'font-size:1rem;margin-top:.45rem';
     prompt.rows = 2; prompt.value = t.prompt;
     prompt.dataset.idx = i; prompt.dataset.k = 'prompt';
     d.appendChild(prompt);
@@ -208,6 +226,7 @@
     }
     list.innerHTML = '';
     tasks.forEach((t, i) => list.appendChild(taskCard(t, i)));
+    saveDraft();
     list.querySelectorAll('textarea').forEach(t => comfyAutosizeFit(t));
   }
 
@@ -232,14 +251,43 @@
 
   $('btnClear').addEventListener('click', () => {
     if (tasks.length && !confirm(`清空全部 ${tasks.length} 个任务?`)) return;
-    tasks = []; renderTasks();
+    tasks = []; renderTasks(); localStorage.removeItem(DRAFT_KEY);
   });
+
+  /* ---------- 草稿:主题/参数与任务清单存 localStorage,刷新/误退不丢 ---------- */
+  const DRAFT_KEY = 'comfyweb.batchdraft';
+  function saveDraft() {
+    try {
+      localStorage.setItem(DRAFT_KEY, JSON.stringify({
+        theme: $('themeInput').value, count: $('countInput').value,
+        style: $('styleInput').value,
+        tplPos: $('tplPos').value, tplNeg: $('tplNeg').value, tasks,
+      }));
+    } catch (e) { /* 存储满等忽略 */ }
+  }
+  function loadDraft() {
+    try {
+      const d = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null');
+      if (!d) return;
+      if (d.theme) $('themeInput').value = d.theme;
+      if (d.count) $('countInput').value = d.count;
+      if (d.style) $('styleInput').value = d.style;
+      if (d.tplPos) $('tplPos').value = d.tplPos;
+      if (d.tplNeg) $('tplNeg').value = d.tplNeg;
+      if (Array.isArray(d.tasks) && d.tasks.length) {
+        tasks = d.tasks; renderTasks(); $('tasksPanel').hidden = false;
+      }
+    } catch (e) { /* 草稿损坏则忽略 */ }
+  }
+  ['themeInput', 'countInput', 'styleInput', 'tplPos', 'tplNeg'].forEach(id =>
+    document.getElementById(id).addEventListener('input', saveDraft));
 
   /* ---------- 开始生成 + 进度轮询 ---------- */
 
   $('btnStart').addEventListener('click', async () => {
     const errBox = $('startError');
     errBox.hidden = true;
+    if (wasRunning) { toast('批次正在运行中,请先停止或等待完成', 'bad'); return; }
     const btn = $('btnStart');
     btn.classList.add('is-loading');
     btn.disabled = true;   // 防连点:重复提交会开两批
@@ -260,13 +308,20 @@
       pollStatus();
       if (!pollTimer) pollTimer = setInterval(pollStatus, 2000);
       $('progPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      localStorage.removeItem(DRAFT_KEY);   // 清单已提交,草稿作废
+      wasRunning = true;
     } catch (e) { errBox.textContent = e.message; errBox.hidden = false; }
     finally { btn.classList.remove('is-loading'); btn.disabled = false; }
   });
 
   $('btnStop').addEventListener('click', async () => {
-    try { await toJson(await fetch('/api/batch/stop', { method: 'POST' })); }
-    catch (e) { window.toast && toast('停止失败: ' + e.message); }
+    const btn = $('btnStop');
+    btn.classList.add('is-loading');
+    try {
+      await toJson(await fetch('/api/batch/stop', { method: 'POST' }));
+      toast('已发送停止指令,批次将在当前任务后结束');
+    } catch (e) { window.toast && toast('停止失败: ' + e.message, 'bad'); }
+    finally { btn.classList.remove('is-loading'); }
   });
 
   async function pollStatus() {
@@ -298,8 +353,9 @@
     try {
       const d = await toJson(await fetch('/api/batch/templates'));
       window._batchTplCache = d.templates;
-      await loadTemplates();
+      await loadTemplates(d);
     } catch (e) { /* 模板加载失败不阻塞页面 */ }
+    loadDraft();
     pollStatus();
   })();
 })();

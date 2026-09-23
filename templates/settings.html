@@ -177,8 +177,7 @@
   }
   function privateErr(msg) {
     $('privateError').textContent = msg;
-    $('privateError').hidden = !msg;
-    if (msg) setTimeout(() => { $('privateError').hidden = true; }, 3000);
+    $('privateError').hidden = !msg;   // 错误常驻到下一次操作,3 秒消失会看不清
   }
   /* 开启:未配置时自动用框内密码完成设置,一步到位 */
   $('btnPrivateOn').addEventListener('click', async () => {
@@ -241,7 +240,7 @@
       $('refreshHint').textContent = '已清空缓存,下次打开生成页将拉取最新模型/LoRA 列表';
       $('refreshHint').hidden = false;
       setTimeout(() => { $('refreshHint').hidden = true; }, 4000);
-    } catch (e) { alert(e.message); }
+    } catch (e) { toast(e.message, 'bad'); }
     finally { $('btnRefreshModels').classList.remove('is-loading'); }
   });
 
@@ -256,9 +255,10 @@
           civitai_nsfw: $('civNsfw').checked
         })
       });
-      $('refreshHint').textContent = 'Civitai 设置已保存';
-      $('refreshHint').hidden = false;
-      setTimeout(() => { $('refreshHint').hidden = true; }, 3000);
+      $('civError').classList.remove('task-err');
+      $('civError').textContent = '已保存';
+      $('civError').hidden = false;
+      toast('Civitai 设置已保存');
     } catch (e) {
       $('civError').textContent = e.message;
       $('civError').hidden = false;
@@ -271,7 +271,7 @@
       $('keepHint').textContent = '已保存';
       $('keepHint').hidden = false;
       setTimeout(() => { $('keepHint').hidden = true; }, 2500);
-    } catch (e) { alert(e.message); }
+    } catch (e) { toast(e.message, 'bad'); }
   });
 
   if ($('btnTokenClear'))  // 按钮仅在有 Token 时渲染,不存在则跳过绑定(否则脚本中断,后续全失效)
@@ -281,7 +281,7 @@
       $('civToken').value = '';
       $('btnTokenClear').hidden = true;
       $('civToken').placeholder = 'civitai.com 账户设置里生成';
-    } catch (e) { alert(e.message); }
+    } catch (e) { toast(e.message, 'bad'); }
   });
 
   async function loadWs() {
@@ -316,7 +316,7 @@
       const d = await api('/api/reconnect', { method: 'POST' });
       $('wsState').textContent = 'WS 状态: ' + (d.ws || '重连中');
       loadWs();
-    } catch (e) { alert('重连失败: ' + e.message); }
+    } catch (e) { toast('重连失败: ' + e.message, 'bad'); }
     finally { btn.disabled = false; btn.classList.remove('is-loading'); }
   });
   loadWs();
@@ -345,11 +345,12 @@
   $('btnQueueClear').addEventListener('click', async () => {
     if (!confirm('清空所有排队的任务?')) return;
     try { await api('/api/queue/clear', { method: 'POST' }); loadQueue(); }
-    catch (e) { alert(e.message); }
+    catch (e) { toast(e.message, 'bad'); }
   });
   $('btnInterrupt').addEventListener('click', async () => {
-    try { await api('/api/queue/interrupt', { method: 'POST' }); loadQueue(); }
-    catch (e) { alert('中断失败: ' + e.message); }
+    if (!confirm('中断正在生成的任务?')) return;
+    try { await api('/api/queue/interrupt', { method: 'POST' }); loadQueue(); toast('已发送中断指令'); }
+    catch (e) { toast('中断失败: ' + e.message, 'bad'); }
   });
 
   /* ---------- 图片库 ---------- */
@@ -377,10 +378,34 @@
     } catch (e) { errBox.textContent = e.message; errBox.hidden = false; }
   });
   $('btnImgSync').addEventListener('click', async () => {
+    const btn = $('btnImgSync');
+    btn.classList.add('is-loading');
+    btn.disabled = true;
     try {
       await api('/api/storage/sync', { method: 'POST' });
-      setTimeout(loadImgStorage, 2000);
-    } catch (e) { alert('触发失败: ' + e.message); }
+      toast('已触发同步,正在收编…');
+      // 轮询直到待入库/待收编清零(长任务,点了要有响应直到真正完成)
+      let ticks = 0;
+      const t = setInterval(async () => {
+        ticks++;
+        let pending = 0;
+        try {
+          const d = await api('/api/storage');
+          pending = (d.pending || 0) + (d.pending_collect || 0);
+        } catch (e) { /* 单次失败继续等 */ }
+        if (!pending || ticks > 30) {
+          clearInterval(t);
+          btn.classList.remove('is-loading');
+          btn.disabled = false;
+          toast(pending ? '同步仍在后台进行' : '同步完成');
+          loadImgStorage();
+        }
+      }, 2000);
+    } catch (e) {
+      toast('触发失败: ' + e.message, 'bad');
+      btn.classList.remove('is-loading');
+      btn.disabled = false;
+    }
   });
   loadImgStorage();
 
@@ -415,7 +440,7 @@
             body: JSON.stringify({ feature: name, enabled: !on }) });
           await loadFeatures();
         } catch (e) {
-          alert('切换失败: ' + e.message);
+          toast('切换失败: ' + e.message, 'bad');
           btn.disabled = false;
         }
       });

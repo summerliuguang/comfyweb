@@ -14,6 +14,7 @@
         <select id="remoteSelect"><option value="">— 先刷新列表 —</option></select>
       </div>
       <button class="button" id="btnRemoteRefresh">刷新</button>
+      <p class="task-err" id="remoteError" hidden></p>
     </div>
     <p class="hint">列出 ComfyUI 界面里「保存」过的工作流,自动转换后进入确认步骤。含子图/bypass 节点或特殊插件时可能转换失败,可改用下方粘贴「导出(API)」的方式。</p>
     <button class="button is-link is-light" id="btnRemoteImport" disabled style="margin-top:.4rem">拉取并解析</button>
@@ -95,6 +96,9 @@
         sel.appendChild(op);
       }
       $('btnRemoteImport').disabled = d.workflows.length === 0;
+      sel.disabled = false;
+      const err = $('remoteError');
+      if (err) err.hidden = true;
     } catch (e) {
       sel.innerHTML = '';
       const op = document.createElement('option');
@@ -128,15 +132,35 @@
     r.readAsText(f);
   });
 
+  /* 粘贴的长 JSON 存草稿,误触返回/刷新不丢;有内容时离开提醒 */
+  const WF_DRAFT = 'comfyweb.wfdraft';
+  const wfText = $('wfText');
+  try { wfText.value = localStorage.getItem(WF_DRAFT) || ''; } catch (e) {}
+  wfText.addEventListener('input', () => {
+    try { localStorage.setItem(WF_DRAFT, wfText.value); } catch (e) {}
+  });
+  wfText.addEventListener('change', () => {
+    try { if (!wfText.value.trim()) localStorage.removeItem(WF_DRAFT); } catch (e) {}
+  });
+  window.addEventListener('beforeunload', (e) => {
+    if (wfText.value.trim().length > 50 && $('step1') && !$('step1').hidden) {
+      e.preventDefault();
+      e.returnValue = '';
+    }
+  });
+
   $('btnParse').addEventListener('click', async () => {
     $('parseError').hidden = true;
+    const btn = $('btnParse');
+    btn.classList.add('is-loading');
+    btn.disabled = true;
     try {
       const d = await api('/api/workflows/parse', { text: $('wfText').value });
       showReview(d);
     } catch (e) {
       $('parseError').textContent = e.message;
       $('parseError').hidden = false;
-    }
+    } finally { btn.classList.remove('is-loading'); btn.disabled = false; }
   });
 
   $('btnBack').addEventListener('click', () => {

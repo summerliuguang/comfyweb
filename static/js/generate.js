@@ -54,10 +54,10 @@
   let tplSeq = 0;   // 快速切换模板时丢弃过期响应,防止旧模板覆盖表单
   async function loadTemplate() {
     const seq = ++tplSeq;
-    formArea.innerHTML = '';
     submitRow.hidden = true;
     const wid = wfSelect.value;
-    if (!wid) return;
+    if (!wid) { formArea.innerHTML = ''; return; }
+    formArea.innerHTML = '<div class="empty">模板表单加载中…</div>';
     try {
       const data = await toJson(await fetch('/api/workflows/' + numId(wid)));
       if (seq !== tplSeq) return;
@@ -77,7 +77,9 @@
       loadPromptChips();
     } catch (e) {
       if (seq !== tplSeq) return;
-      formArea.innerHTML = `<p class="task-err">模板加载失败: ${esc(e.message)}</p>`;
+      formArea.innerHTML = `<p class="task-err">模板加载失败: ${esc(e.message)}</p>` +
+        '<p style="margin-top:.5rem"><button class="button is-small is-link" id="btnRetryTpl">重试</button></p>';
+      document.getElementById('btnRetryTpl').addEventListener('click', loadTemplate);
     }
   }
 
@@ -143,7 +145,7 @@
         body: JSON.stringify({
           workflow_id: parseInt(wfSelect.value, 10),
           values,
-          count: Math.max(1, parseInt($('countInput').value, 10) || 1),
+          count: Math.min(100, Math.max(1, parseInt($('countInput').value, 10) || 1)),
           random_seed: $('seedRandom') ? $('seedRandom').checked : true,
         }),
       }));
@@ -175,7 +177,7 @@
     let t;
     try {
       t = (await toJson(await fetch('/api/tasks/' + numId(refillTaskId)))).task;
-    } catch (e) { alert(e.message); return; }
+    } catch (e) { toast(e.message, 'bad'); return; }
     const byLabel = {};
     for (const p of t.params || []) byLabel[p.label] = p.value;
     let matched = 0;
@@ -256,7 +258,7 @@
     }
     if (t.images && t.images.length) {
       const g = document.createElement('div');
-      g.className = 'task-imgs';
+      g.className = 'task-imgs' + (t.images.length === 1 ? ' single' : '');
       const list = t.images.map(im => ({ url: im.url, thumb: im.thumb }));
       t.images.slice(0, 8).forEach((im, i) => {
         const a = document.createElement('a');
@@ -281,8 +283,8 @@
       b.textContent = '取消';
       b.addEventListener('click', async () => {
         b.classList.add('is-loading');
-        try { await toJson(await fetch(`/api/tasks/${numId(t.id)}/cancel`, { method: 'POST' })); refreshTasks(); }
-        catch (e) { b.classList.remove('is-loading'); alert(e.message); }
+        try { await toJson(await fetch(`/api/tasks/${numId(t.id)}/cancel`, { method: 'POST' })); toast('已发送取消指令'); refreshTasks(); }
+        catch (e) { b.classList.remove('is-loading'); toast(e.message, 'bad'); }
       });
       row.appendChild(b);
     } else if (t.status === 'done' && t.workflow_id) {
@@ -301,17 +303,38 @@
     return d;
   }
 
+  let taskFailN = 0;   // 连续失败计数:断网/后端异常时任务卡不能假死无声
+  function taskFailBanner() {
+    taskFailN++;
+    if (taskFailN === 3) {
+      let b = document.getElementById('taskFailBar');
+      if (!b) {
+        b = document.createElement('p');
+        b.id = 'taskFailBar';
+        b.className = 'task-err';
+        b.style.marginTop = '.4rem';
+        tasksPanel.prepend(b);
+      }
+      b.textContent = '任务状态刷新失败(网络或后端异常),正在自动重试…';
+      tasksPanel.hidden = false;
+    }
+  }
+  function taskFailOk() {
+    if (taskFailN) { taskFailN = 0; const b = document.getElementById('taskFailBar'); if (b) b.remove(); }
+  }
   async function refreshTasks() {
     let ids = [...pollIds];
     if (!ids.length) {
       const recent = await toJson(await fetch('/api/tasks/recent?limit=8')).catch(() => null);
-      if (!recent) return;
+      if (!recent) { taskFailBanner(); return; }
+      taskFailOk();
       renderCards(recent.tasks);
       pollIds = new Set(recent.tasks.filter(t => t.status === 'queued' || t.status === 'running').map(t => t.id));
       return;
     }
     const res = await toJson(await fetch('/api/tasks?ids=' + ids.map(numId).join(','))).catch(() => null);
-    if (!res) return;
+    if (!res) { taskFailBanner(); return; }
+    taskFailOk();
     renderCards(res.tasks);
     pollIds = new Set(res.tasks.filter(t => t.status === 'queued' || t.status === 'running').map(t => t.id));
   }

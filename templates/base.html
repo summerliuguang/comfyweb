@@ -51,7 +51,9 @@ document.addEventListener('error', function (e) {
 }, true);
 
 /* 全局轻提示:收藏失败/复制失败等瞬时反馈,1.8s 自动消失 */
-window.toast = function (msg) {
+/* toast(msg, kind, action):kind='bad' 错误态(红边,4 秒);action={label, cb} 附撤销
+   等操作按钮(4 秒),默认成功态 1.8 秒 */
+window.toast = function (msg, kind, action) {
   let el = document.getElementById('gToast');
   if (!el) {
     el = document.createElement('div');
@@ -60,9 +62,22 @@ window.toast = function (msg) {
     document.body.appendChild(el);
   }
   el.textContent = msg;
+  if (action) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'g-toast-act';
+    b.textContent = action.label;
+    b.addEventListener('click', () => {
+      el.classList.remove('show');
+      clearTimeout(el._t);
+      action.cb();
+    });
+    el.appendChild(b);
+  }
   el.classList.add('show');
   clearTimeout(el._t);
-  el._t = setTimeout(() => el.classList.remove('show'), 1800);
+  const ttl = action ? 4000 : (kind === 'bad' ? 4000 : 1800);
+  el._t = setTimeout(() => el.classList.remove('show'), ttl);
 };
 
 /* 文本域随内容增高(提示词等),不用内部滚动条。

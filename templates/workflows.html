@@ -150,7 +150,7 @@
             location.href = '/workflows?imported=' + encodeURIComponent(r.name + warn);
           } catch (e) {
             quick.classList.remove('is-loading');
-            alert('导入失败: ' + e.message + '\n可改用「评审导入」或粘贴「导出(API)」JSON');
+            toast('导入失败: ' + e.message + '\n可改用「评审导入」或粘贴「导出(API)」JSON', 'bad');
           }
         });
         const review = document.createElement('button');
@@ -219,7 +219,7 @@
         try {
           const r = await fetch(`/api/workflows/${c.id}/delete`, { method: 'POST' });
           if (r.ok) location.reload();
-          else { b.classList.remove('is-loading'); b.disabled = false; const d2 = await r.json().catch(() => ({})); alert(d2.error || r.status); }
+          else { b.classList.remove('is-loading'); b.disabled = false; const d2 = await r.json().catch(() => ({})); toast(d2.error || r.status, 'bad'); }
         } catch (e) {
           b.classList.remove('is-loading'); b.disabled = false;
           window.toast && toast('删除失败: ' + e.message);
@@ -257,7 +257,7 @@
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: cb.checked })
       });
-      if (!r.ok) { cb.checked = !cb.checked; const d = await r.json().catch(() => ({})); alert(d.error || r.status); }
+      if (!r.ok) { cb.checked = !cb.checked; const d = await r.json().catch(() => ({})); toast(d.error || r.status, 'bad'); }
     });
   });
   document.querySelectorAll('.w-del').forEach(btn => {
@@ -265,7 +265,7 @@
       if (!confirm(`删除模板「${btn.dataset.name}」?生成记录与图片不受影响。`)) return;
       const r = await fetch(`/api/workflows/${btn.dataset.id}/delete`, { method: 'POST' });
       if (r.ok) location.reload();
-      else { const d = await r.json().catch(() => ({})); alert(d.error || r.status); }
+      else { const d = await r.json().catch(() => ({})); toast(d.error || r.status, 'bad'); }
     });
   });
 
@@ -283,7 +283,7 @@
       if (r.ok) location.reload();
       else {
         const d = await r.json().catch(() => ({}));
-        alert(d.error || r.status);
+        toast(d.error || r.status, 'bad');
         btn.classList.remove('is-loading');
         btn.disabled = false;
       }
@@ -300,7 +300,7 @@
       if (r.ok) location.reload();
       else {
         const d = await r.json().catch(() => ({}));
-        alert(d.error || r.status);
+        toast(d.error || r.status, 'bad');
         btn.classList.remove('is-loading');
         btn.disabled = false;
       }
